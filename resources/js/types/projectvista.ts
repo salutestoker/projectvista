@@ -35,6 +35,104 @@ export interface ProjectCardPayload {
     role: ProjectVistaRole;
 }
 
+export interface DashboardMetricPayload {
+    label: string;
+    value: string | number;
+    detail: string;
+    tone?: 'default' | 'gold';
+}
+
+export interface DashboardProjectRowPayload {
+    id: number;
+    name: string;
+    code: string;
+    slug: string;
+    location: string;
+    progress: number;
+    next_step: string;
+    date_range?: string | null;
+    approvals: number;
+    payment_percent: number;
+    payment_paid: string;
+    payment_total: string;
+    messages: number;
+    hero_image_url?: string | null;
+    role_label?: string;
+    current_task?: string;
+    due_date?: string | null;
+    work_status?: string;
+}
+
+export interface BusinessHomePayload {
+    type: 'owner' | 'manager';
+    title: string;
+    subtitle: string;
+    metrics: DashboardMetricPayload[];
+    project_rows: DashboardProjectRowPayload[];
+    messages: { author: string; body: string }[];
+    approvals_overview: { label: string; value: number; color: string }[];
+    timeline: {
+        percent: number;
+        status: string;
+        next_milestone: string;
+        date_range?: string | null;
+    };
+    payments: {
+        collected: string;
+        total: string;
+        percent: number;
+        upcoming: number;
+    };
+}
+
+export interface SubcontractorHomePayload {
+    type: 'subcontractor';
+    title: string;
+    subtitle: string;
+    metrics: DashboardMetricPayload[];
+    project_rows: DashboardProjectRowPayload[];
+    this_week: {
+        title: string;
+        project?: string | null;
+        date_range?: string | null;
+    }[];
+    waiting_on: string[];
+}
+
+export interface ClientHomePayload {
+    type: 'client';
+    project: {
+        name: string;
+        location: string;
+        status_label: string;
+        next_step: string;
+        date_range?: string | null;
+        approvals_pending: number;
+        payments_paid: string;
+        payments_total: string;
+        payment_percent: number;
+        latest_update?: string | null;
+        next_step_copy?: string | null;
+    } | null;
+    updates: {
+        title: string;
+        date: string;
+        image_url?: string | null;
+    }[];
+}
+
+export interface SuperAdminHomePayload {
+    type: 'super_admin';
+    title: string;
+    subtitle: string;
+}
+
+export type DashboardHomePayload =
+    | BusinessHomePayload
+    | SubcontractorHomePayload
+    | ClientHomePayload
+    | SuperAdminHomePayload;
+
 export interface TimelineTaskPayload {
     id: number;
     title: string;

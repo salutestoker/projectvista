@@ -21,6 +21,11 @@ Route::get('/', function () {
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/dashboard', DashboardController::class)->name('dashboard');
     Route::get('/admin/command-center', SuperAdminController::class)->name('super-admin.dashboard');
+    Route::get('/admin/components', function () {
+        abort_unless(request()->user()?->isSuperAdmin(), 403);
+
+        return Inertia::render('ProjectVista/ComponentLibrary');
+    })->name('super-admin.components');
 
     Route::get('/companies/{company:slug}/admin', [CompanyAdminController::class, 'show'])->name('companies.admin');
     Route::post('/companies/{company:slug}/invitations', [CompanyAdminController::class, 'invite'])->name('companies.invitations.store');

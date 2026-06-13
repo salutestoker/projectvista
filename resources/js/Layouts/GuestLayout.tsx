@@ -1,5 +1,5 @@
+import { ProjectVistaLogo } from '@/Components/ProjectVista/ProjectVistaLogo';
 import { Link } from '@inertiajs/react';
-import { ShieldCheck } from 'lucide-react';
 import { PropsWithChildren } from 'react';
 
 export default function Guest({ children }: PropsWithChildren) {
@@ -15,19 +15,11 @@ export default function Guest({ children }: PropsWithChildren) {
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(214,179,106,0.22),transparent_36%)]" />
 
             <header className="relative z-20 mx-auto w-full max-w-7xl px-5 py-6 md:px-8">
-                <Link href="/" className="inline-flex items-center gap-3">
-                    <div className="grid h-10 w-10 place-items-center rounded-lg bg-[#d6b36a] text-black">
-                        <ShieldCheck className="h-5 w-5" />
-                    </div>
-                    <div>
-                        <div className="font-semibold tracking-wide">
-                            ProjectVista
-                        </div>
-                        <div className="text-xs text-white/45">
-                            Luxury project clarity
-                        </div>
-                    </div>
-                </Link>
+                <div className="flex justify-center px-10 lg:block">
+                    <Link href="/" className="inline-flex items-center gap-3">
+                        <ProjectVistaLogo className="h-14" />
+                    </Link>
+                </div>
             </header>
 
             <div className="relative z-10 mx-auto grid min-h-screen w-full max-w-7xl lg:grid-cols-[1fr_500px] lg:px-8">

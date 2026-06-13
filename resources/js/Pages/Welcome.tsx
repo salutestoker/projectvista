@@ -1,3 +1,4 @@
+import { ProjectVistaLogo } from '@/Components/ProjectVista/ProjectVistaLogo';
 import { PageProps } from '@/types';
 import { Head, Link } from '@inertiajs/react';
 import {
@@ -7,7 +8,6 @@ import {
     FileText,
     Home,
     MessageSquare,
-    ShieldCheck,
     Sparkles,
 } from 'lucide-react';
 import { ReactNode } from 'react';
@@ -31,17 +31,7 @@ export default function Welcome({ auth }: PageProps) {
 
                     <header className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6 md:px-8">
                         <Link href="/" className="flex items-center gap-3">
-                            <div className="grid h-10 w-10 place-items-center rounded-lg bg-[#d6b36a] text-black">
-                                <ShieldCheck className="h-5 w-5" />
-                            </div>
-                            <div>
-                                <div className="font-semibold tracking-wide">
-                                    ProjectVista
-                                </div>
-                                <div className="text-xs text-white/45">
-                                    Luxury project clarity
-                                </div>
-                            </div>
+                            <ProjectVistaLogo className="h-14" />
                         </Link>
 
                         <nav className="flex items-center gap-3">
@@ -76,7 +66,7 @@ export default function Welcome({ auth }: PageProps) {
                             <div className="inline-flex rounded-full border border-[#d6b36a]/30 bg-[#d6b36a]/10 px-3 py-1 text-xs font-medium tracking-[0.25em] text-[#f5dfa6] uppercase">
                                 Premium homeowner portal
                             </div>
-                            <h1 className="mt-6 max-w-4xl text-5xl leading-tight font-semibold text-white md:text-7xl">
+                            <h1 className="mt-6 max-w-4xl text-5xl leading-tight font-semibold text-white md:text-6xl">
                                 Turn expensive home projects into calm,
                                 confident experiences.
                             </h1>

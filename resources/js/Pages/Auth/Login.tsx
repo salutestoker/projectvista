@@ -1,8 +1,12 @@
-import Checkbox from '@/Components/Checkbox';
-import InputError from '@/Components/InputError';
-import InputLabel from '@/Components/InputLabel';
-import PrimaryButton from '@/Components/PrimaryButton';
-import TextInput from '@/Components/TextInput';
+import { Button } from '@/Components/ui/button';
+import { Checkbox } from '@/Components/ui/checkbox';
+import {
+    Field,
+    FieldError,
+    FieldGroup,
+    FieldLabel,
+} from '@/Components/ui/field';
+import { Input } from '@/Components/ui/input';
 import GuestLayout from '@/Layouts/GuestLayout';
 import { Head, Link, useForm } from '@inertiajs/react';
 import { ArrowRight, CheckCircle2 } from 'lucide-react';
@@ -52,80 +56,84 @@ export default function Login({
                 </p>
             </div>
 
-            <form onSubmit={submit} className="space-y-5">
-                <div>
-                    <InputLabel
-                        htmlFor="email"
-                        value="Email"
-                        className="text-white/68"
-                    />
+            <form onSubmit={submit}>
+                <FieldGroup>
+                    <Field data-invalid={Boolean(errors.email)}>
+                        <FieldLabel htmlFor="email" className="text-white/68">
+                            Email
+                        </FieldLabel>
+                        <Input
+                            id="email"
+                            type="email"
+                            name="email"
+                            value={data.email}
+                            className="focus-visible:border-primary focus-visible:ring-primary/40 h-11 border-white/10 bg-white/[0.06] px-4 py-3 text-white placeholder:text-white/30"
+                            autoComplete="username"
+                            autoFocus
+                            aria-invalid={Boolean(errors.email)}
+                            onChange={(e) => setData('email', e.target.value)}
+                        />
+                        <FieldError>{errors.email}</FieldError>
+                    </Field>
 
-                    <TextInput
-                        id="email"
-                        type="email"
-                        name="email"
-                        value={data.email}
-                        className="mt-2 block w-full border-white/10 bg-white/[0.06] text-white placeholder:text-white/30 focus:border-[#d6b36a] focus:ring-[#d6b36a]"
-                        autoComplete="username"
-                        isFocused={true}
-                        onChange={(e) => setData('email', e.target.value)}
-                    />
-
-                    <InputError message={errors.email} className="mt-2" />
-                </div>
-
-                <div>
-                    <InputLabel
-                        htmlFor="password"
-                        value="Password"
-                        className="text-white/68"
-                    />
-
-                    <TextInput
-                        id="password"
-                        type="password"
-                        name="password"
-                        value={data.password}
-                        className="mt-2 block w-full border-white/10 bg-white/[0.06] text-white placeholder:text-white/30 focus:border-[#d6b36a] focus:ring-[#d6b36a]"
-                        autoComplete="current-password"
-                        onChange={(e) => setData('password', e.target.value)}
-                    />
-
-                    <InputError message={errors.password} className="mt-2" />
-                </div>
-
-                <div className="block">
-                    <label className="flex items-center">
-                        <Checkbox
-                            name="remember"
-                            checked={data.remember}
+                    <Field data-invalid={Boolean(errors.password)}>
+                        <FieldLabel
+                            htmlFor="password"
+                            className="text-white/68"
+                        >
+                            Password
+                        </FieldLabel>
+                        <Input
+                            id="password"
+                            type="password"
+                            name="password"
+                            value={data.password}
+                            className="focus-visible:border-primary focus-visible:ring-primary/40 h-11 border-white/10 bg-white/[0.06] px-4 py-3 text-white placeholder:text-white/30"
+                            autoComplete="current-password"
+                            aria-invalid={Boolean(errors.password)}
                             onChange={(e) =>
-                                setData('remember', e.target.checked)
+                                setData('password', e.target.value)
                             }
                         />
-                        <span className="ms-2 text-sm text-white/55">
-                            Remember me
-                        </span>
-                    </label>
-                </div>
+                        <FieldError>{errors.password}</FieldError>
+                    </Field>
 
-                <div className="flex items-center justify-between gap-4">
-                    {canResetPassword && (
-                        <Link
-                            href={route('password.request')}
-                            className="rounded-md text-sm text-white/50 underline underline-offset-4 transition hover:text-[#d6b36a] focus:ring-2 focus:ring-[#d6b36a] focus:ring-offset-2 focus:ring-offset-[#090b0f] focus:outline-none"
+                    <Field orientation="horizontal">
+                        <Checkbox
+                            id="remember"
+                            name="remember"
+                            checked={data.remember}
+                            onCheckedChange={(checked) =>
+                                setData('remember', checked === true)
+                            }
+                        />
+                        <FieldLabel
+                            htmlFor="remember"
+                            className="text-sm text-white/55"
                         >
-                            Forgot your password?
-                        </Link>
-                    )}
+                            Remember me
+                        </FieldLabel>
+                    </Field>
 
-                    <PrimaryButton
-                        className="border-0 bg-[#d6b36a] text-black hover:bg-[#f0d58c] focus:bg-[#f0d58c] active:bg-[#caa65d]"
-                        disabled={processing}
-                    >
-                        Log in <ArrowRight className="ms-2 h-4 w-4" />
-                    </PrimaryButton>
-                </div>
+                    <div className="flex items-center justify-between gap-4">
+                        {canResetPassword && (
+                            <Link
+                                href={route('password.request')}
+                                className="hover:text-primary focus:ring-primary focus:ring-offset-background rounded-md text-sm text-white/50 underline underline-offset-4 transition focus:ring-2 focus:ring-offset-2 focus:outline-none"
+                            >
+                                Forgot your password?
+                            </Link>
+                        )}
+
+                        <Button
+                            type="submit"
+                            className="bg-primary text-primary-foreground hover:bg-primary/85"
+                            disabled={processing}
+                        >
+                            Log in <ArrowRight data-icon="inline-end" />
+                        </Button>
+                    </div>
+                </FieldGroup>
             </form>
 
             <div className="mt-6 rounded-lg border border-[#d6b36a]/25 bg-[#d6b36a]/10 p-4">

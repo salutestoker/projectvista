@@ -402,6 +402,158 @@ class DatabaseSeeder extends Seeder
             ]);
         }
 
+        foreach ([
+            ['Johnson Residence', 'johnson-residence', 'Paradise Valley', 'Plumbing Rough-in', 48, 82500, 45000, 1, 3, -2, 4],
+            ['Williams Residence', 'williams-residence', 'Phoenix', 'Decking Layout', 75, 120000, 96000, 3, 8, 1, 5],
+            ['Brown Residence', 'brown-residence', 'Chandler', 'Excavation', 35, 80000, 32000, 2, 2, -4, 1],
+            ['Davis Residence', 'davis-residence', 'Scottsdale', 'Startup & Balance', 90, 120000, 108000, 1, 5, 3, 6],
+        ] as [$projectName, $slug, $city, $phase, $progress, $contractAmount, $paidAmount, $approvalCount, $messageCount, $startOffset, $dueOffset]) {
+            $extraProject = Project::query()->create([
+                'company_id' => $company->id,
+                'manager_id' => $manager->id,
+                'name' => $projectName,
+                'slug' => $slug,
+                'address_line' => fake()->streetAddress(),
+                'city' => $city,
+                'state' => 'AZ',
+                'postal_code' => '85255',
+                'project_type' => 'Luxury Pool & Outdoor Living',
+                'status' => 'active',
+                'phase' => $phase,
+                'percent_complete' => $progress,
+                'health_status' => $approvalCount > 1 ? 'needs_client_decision' : 'on_track',
+                'contract_amount' => $contractAmount,
+                'starts_on' => now()->subWeeks(8),
+                'estimated_completion_on' => now()->addWeeks(6),
+                'hero_image_path' => 'demo/smith-residence-hero.png',
+                'client_summary' => 'A premium outdoor living project tracked through ProjectVista.',
+                'latest_update' => "{$phase} is the current focus for {$projectName}.",
+                'next_step' => 'Keep approvals and assigned work moving this week.',
+            ]);
+
+            $extraProject->users()->attach($manager->id, [
+                'role' => Roles::COMPANY_MANAGER,
+                'assigned_scope' => 'Full project management',
+            ]);
+            $extraProject->users()->attach($subcontractor->id, [
+                'role' => Roles::SUBCONTRACTOR,
+                'assigned_scope' => 'Tile Contractor',
+                'permissions' => json_encode(['timeline', 'approved_selections', 'visible_documents']),
+            ]);
+
+            foreach ([
+                ['Preconstruction Complete', 'Preconstruction', 'completed', -30, -20, false],
+                [$phase, 'Construction', $progress > 80 ? 'upcoming' : 'in_progress', $startOffset, $dueOffset, true],
+                ['Client Review', 'Finishes', $approvalCount > 1 ? 'blocked' : 'upcoming', $dueOffset + 1, $dueOffset + 4, false],
+            ] as $index => [$title, $taskPhase, $status, $startsOffset, $taskDueOffset, $subVisible]) {
+                TimelineTask::query()->create([
+                    'company_id' => $company->id,
+                    'project_id' => $extraProject->id,
+                    'timeline_template_id' => $timelineTemplate->id,
+                    'title' => $title,
+                    'phase' => $taskPhase,
+                    'description' => 'Demo milestone for the expanded ProjectVista home dashboard.',
+                    'sort_order' => $index + 1,
+                    'status' => $status,
+                    'starts_on' => now()->addDays($startsOffset),
+                    'due_on' => now()->addDays($taskDueOffset),
+                    'completed_on' => $status === 'completed' ? now()->addDays($taskDueOffset) : null,
+                    'client_visible' => true,
+                    'subcontractor_visible' => $subVisible,
+                    'requires_acknowledgement' => $status === 'blocked',
+                ]);
+            }
+
+            $extraSelection = Selection::query()->create([
+                'company_id' => $company->id,
+                'project_id' => $extraProject->id,
+                'selection_category_id' => $categories[1]->id,
+                'name' => "{$phase} Confirmation",
+                'description' => 'Demo selection supporting the role-specific home dashboards.',
+                'image_path' => 'demo/selection-decking.png',
+                'status' => $approvalCount > 0 ? 'waiting_client' : 'approved',
+                'manager_note' => 'Waiting for customer review.',
+                'due_on' => now()->addDays($dueOffset),
+            ]);
+
+            for ($i = 1; $i <= $approvalCount; $i++) {
+                Approval::query()->create([
+                    'company_id' => $company->id,
+                    'project_id' => $extraProject->id,
+                    'approval_template_id' => $approvalTemplate->id,
+                    'selection_id' => $extraSelection->id,
+                    'requested_by_id' => $manager->id,
+                    'title' => "{$phase} Approval {$i}",
+                    'body' => "Please review the {$phase} approval for {$projectName}.",
+                    'status' => 'pending',
+                    'due_on' => now()->addDays($dueOffset + $i),
+                ]);
+            }
+
+            foreach ([
+                ['Paid Milestone', 'Completed project milestone.', $paidAmount, 'paid', -5, -4, 1],
+                ['Current Milestone', 'Upcoming external payment milestone.', $contractAmount - $paidAmount, 'due', $dueOffset, null, 2],
+            ] as [$label, $description, $amount, $status, $paymentDueOffset, $completedOffset, $order]) {
+                PaymentMilestone::query()->create([
+                    'company_id' => $company->id,
+                    'project_id' => $extraProject->id,
+                    'label' => $label,
+                    'description' => $description,
+                    'amount' => $amount,
+                    'status' => $status,
+                    'due_on' => now()->addDays($paymentDueOffset),
+                    'completed_on' => $completedOffset === null ? null : now()->addDays($completedOffset),
+                    'payment_url' => $status === 'due' ? 'https://pay.example.test/projectvista/'.$slug : null,
+                    'provider_label' => $status === 'due' ? 'External payment link' : null,
+                    'client_visible' => true,
+                    'sort_order' => $order,
+                ]);
+            }
+
+            ProjectDocument::query()->create([
+                'company_id' => $company->id,
+                'project_id' => $extraProject->id,
+                'uploaded_by_id' => $manager->id,
+                'title' => "{$phase} Field Packet",
+                'category' => 'Operations',
+                'path' => 'demo/tile-layout.pdf',
+                'mime_type' => 'application/pdf',
+                'size' => 128000,
+                'visibility' => 'shared',
+                'client_visible' => true,
+                'subcontractor_visible' => true,
+            ]);
+
+            MediaAsset::query()->create([
+                'company_id' => $company->id,
+                'project_id' => $extraProject->id,
+                'uploaded_by_id' => $manager->id,
+                'collection' => 'progress',
+                'path' => 'demo/smith-progress-1.png',
+                'alt_text' => "{$phase} update",
+            ]);
+
+            $extraThread = MessageThread::query()->create([
+                'company_id' => $company->id,
+                'project_id' => $extraProject->id,
+                'subject' => "{$phase} update",
+                'status' => 'open',
+                'last_message_at' => now()->subHours($messageCount),
+            ]);
+
+            for ($i = 1; $i <= $messageCount; $i++) {
+                Message::query()->create([
+                    'message_thread_id' => $extraThread->id,
+                    'company_id' => $company->id,
+                    'project_id' => $extraProject->id,
+                    'user_id' => $client->id,
+                    'body' => "Customer message {$i} about {$phase}.",
+                    'created_at' => now()->subHours($messageCount - $i + 1),
+                    'updated_at' => now()->subHours($messageCount - $i + 1),
+                ]);
+            }
+        }
+
         Invitation::query()->create([
             'company_id' => $company->id,
             'project_id' => $project->id,

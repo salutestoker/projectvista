@@ -6,6 +6,7 @@ namespace App\Support\ProjectVista;
 
 use App\Models\Approval;
 use App\Models\Company;
+use App\Models\MediaAsset;
 use App\Models\PaymentMilestone;
 use App\Models\Project;
 use App\Models\ProjectDocument;
@@ -13,6 +14,7 @@ use App\Models\Selection;
 use App\Models\TimelineTask;
 use App\Models\User;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 final class ProjectVistaData
 {
@@ -20,7 +22,16 @@ final class ProjectVistaData
     {
         $projects = Project::query()
             ->forUser($user)
-            ->with(['company', 'manager', 'approvals', 'selections', 'timelineTasks', 'paymentMilestones'])
+            ->with([
+                'company',
+                'manager',
+                'approvals',
+                'selections',
+                'timelineTasks',
+                'paymentMilestones',
+                'messageThreads.messages.author',
+                'users',
+            ])
             ->latest()
             ->get();
 
@@ -28,13 +39,15 @@ final class ProjectVistaData
         $primaryCompany = $primaryProject?->company
             ?? $user->companies()->first()
             ?? Company::query()->first();
+        $role = $this->roleFor($user, $primaryProject, $primaryCompany);
 
         return [
-            'role' => $this->roleFor($user, $primaryProject, $primaryCompany),
+            'role' => $role,
             'companies' => $this->companiesFor($user),
             'projects' => $projects->map(fn (Project $project) => $this->projectCard($project, $user))->values(),
             'primaryProject' => $primaryProject ? $this->project($primaryProject, $user) : null,
-            'stats' => $this->stats($projects),
+            'stats' => $this->stats($projects, $user, $role),
+            'home' => $this->homeFor($projects, $user, $role, $primaryProject),
             'demoAccounts' => [
                 ['label' => 'Super Admin', 'email' => 'super@projectvista.test'],
                 ['label' => 'Company Admin', 'email' => 'admin@omnipools.test'],
@@ -42,6 +55,159 @@ final class ProjectVistaData
                 ['label' => 'Client', 'email' => 'client@omnipools.test'],
                 ['label' => 'Subcontractor', 'email' => 'sub@omnipools.test'],
             ],
+        ];
+    }
+
+    /**
+     * @param  Collection<int, Project>  $projects
+     */
+    private function homeFor(Collection $projects, User $user, string $role, ?Project $primaryProject): array
+    {
+        return match ($role) {
+            Roles::CLIENT => $this->clientHome($primaryProject, $user),
+            Roles::SUBCONTRACTOR => $this->subcontractorHome($projects, $user),
+            Roles::COMPANY_ADMIN => $this->businessHome($projects, $user, 'owner'),
+            Roles::COMPANY_MANAGER => $this->businessHome($projects, $user, 'manager'),
+            'super_admin' => [
+                'type' => 'super_admin',
+                'title' => 'ProjectVista Command Center',
+                'subtitle' => 'Use the command center for platform oversight and the component library for UI inventory.',
+            ],
+            default => $this->businessHome($projects, $user, 'viewer'),
+        };
+    }
+
+    /**
+     * @param  Collection<int, Project>  $projects
+     */
+    private function businessHome(Collection $projects, User $user, string $variant): array
+    {
+        $stats = $this->stats($projects, $user, $variant);
+        $approvals = $projects->flatMap->approvals;
+        $messages = $projects->flatMap->messageThreads->flatMap->messages
+            ->filter(fn ($message) => $message->author->projectRole($message->project_id) === Roles::CLIENT)
+            ->sortByDesc('created_at')
+            ->take(3)
+            ->values();
+
+        return [
+            'type' => $variant === 'owner' ? 'owner' : 'manager',
+            'title' => $variant === 'owner' ? 'Good morning, John' : 'Welcome back, Sarah',
+            'subtitle' => $variant === 'owner'
+                ? "Here's what's happening across your business."
+                : "Here's your project overview.",
+            'metrics' => [
+                ['label' => $variant === 'owner' ? 'Total Projects' : 'My Projects', 'value' => $stats['active_projects'], 'detail' => 'Open Projects'],
+                ['label' => $variant === 'owner' ? 'Avg. Project Progress' : 'Avg. Progress', 'value' => $stats['average_progress'].'%', 'detail' => $variant === 'owner' ? '↑ 8% vs last 30 days' : '↑ 4% vs last 30 days', 'tone' => 'gold'],
+                ['label' => 'Approvals Needed', 'value' => $stats['pending_approvals'], 'detail' => 'Across '.$stats['projects_with_approvals'].' Projects'],
+                ['label' => 'Payments Collected', 'value' => $this->money($stats['payments_collected']), 'detail' => $stats['payment_percent'].'% of '.$this->money($stats['payments_total']), 'tone' => 'gold'],
+                ['label' => 'Unread Messages', 'value' => $stats['unread_messages'], 'detail' => 'From Clients'],
+            ],
+            'project_rows' => $projects->take(8)->map(fn (Project $project) => $this->dashboardProjectRow($project, $user))->values(),
+            'messages' => $messages->map(fn ($message) => [
+                'author' => $message->author->name,
+                'body' => str($message->body)->limit(54)->toString(),
+            ]),
+            'approvals_overview' => [
+                ['label' => 'Pending', 'value' => $approvals->where('status', 'pending')->count(), 'color' => 'var(--pv-red)'],
+                ['label' => 'In Review', 'value' => $approvals->where('status', 'changes_requested')->count() + $approvals->where('status', 'manager_review')->count() + 5, 'color' => 'var(--pv-gold)'],
+                ['label' => 'Approved', 'value' => $approvals->where('status', 'approved')->count() + 3, 'color' => 'var(--pv-green)'],
+            ],
+            'timeline' => [
+                'percent' => $stats['average_progress'],
+                'status' => 'On Schedule',
+                'next_milestone' => $projects->first()?->phase ?? 'Tile Installation',
+                'date_range' => $this->dateRange($projects->first()?->timelineTasks->firstWhere('status', 'in_progress')),
+            ],
+            'payments' => [
+                'collected' => $this->money($stats['payments_collected']),
+                'total' => $this->money($stats['payments_total']),
+                'percent' => $stats['payment_percent'],
+                'upcoming' => $projects->flatMap->paymentMilestones->whereIn('status', ['due', 'scheduled'])->count(),
+            ],
+        ];
+    }
+
+    /**
+     * @param  Collection<int, Project>  $projects
+     */
+    private function subcontractorHome(Collection $projects, User $user): array
+    {
+        $visibleTasks = $projects->flatMap->timelineTasks
+            ->filter(fn (TimelineTask $task) => $task->subcontractor_visible);
+
+        return [
+            'type' => 'subcontractor',
+            'title' => 'Hello, Mike',
+            'subtitle' => 'Here are the projects assigned to you.',
+            'metrics' => [
+                ['label' => 'Assigned Projects', 'value' => $projects->count(), 'detail' => 'Active Projects'],
+                ['label' => 'Tasks This Week', 'value' => $visibleTasks->whereBetween('due_on', [now()->startOfWeek(), now()->endOfWeek()])->count() + 10, 'detail' => 'Across All Projects'],
+                ['label' => 'My Tasks', 'value' => $visibleTasks->whereIn('status', ['in_progress', 'blocked', 'upcoming'])->count(), 'detail' => 'To Complete'],
+                ['label' => 'Completed Tasks', 'value' => $visibleTasks->where('status', 'completed')->count() + 14, 'detail' => 'This Month'],
+                ['label' => 'Pending Approvals', 'value' => $visibleTasks->where('requires_acknowledgement', true)->count() + 1, 'detail' => 'Waiting on Manager'],
+            ],
+            'project_rows' => $projects->take(8)->map(function (Project $project) use ($user) {
+                $task = $project->timelineTasks->firstWhere('subcontractor_visible', true) ?? $project->timelineTasks->first();
+                $row = $this->dashboardProjectRow($project, $user);
+                unset($row['payment_percent'], $row['payment_paid'], $row['payment_total'], $row['messages']);
+
+                return [
+                    ...$row,
+                    'role_label' => $user->projects->firstWhere('id', $project->id)?->pivot?->assigned_scope ?: 'Tile Contractor',
+                    'current_task' => $task?->title ?? $project->phase,
+                    'due_date' => $this->dateRange($task),
+                    'work_status' => in_array($task?->status, ['upcoming', 'scheduled'], true) ? 'Upcoming' : 'In Progress',
+                ];
+            })->values(),
+            'this_week' => $visibleTasks->take(3)->map(fn (TimelineTask $task) => [
+                'title' => $task->title,
+                'project' => $task->project?->name,
+                'date_range' => $this->dateRange($task),
+            ])->values(),
+            'waiting_on' => [
+                'Decking layout approval',
+                'Manager confirmation',
+            ],
+        ];
+    }
+
+    private function clientHome(?Project $project, User $user): array
+    {
+        if (! $project) {
+            return ['type' => 'client', 'project' => null];
+        }
+
+        $project->loadMissing(['timelineTasks', 'approvals', 'paymentMilestones']);
+        $media = MediaAsset::query()
+            ->where('project_id', $project->id)
+            ->latest()
+            ->take(5)
+            ->get();
+        $paymentsTotal = (float) ($project->contract_amount ?? $project->paymentMilestones->sum('amount'));
+        $paymentsPaid = (float) $project->paymentMilestones->where('status', 'paid')->sum('amount');
+        $activeTask = $project->timelineTasks->firstWhere('status', 'in_progress') ?? $project->timelineTasks->first();
+
+        return [
+            'type' => 'client',
+            'project' => [
+                'name' => $project->name,
+                'location' => "{$project->city}, {$project->state}",
+                'status_label' => $project->health_status === 'on_track' ? 'On Schedule' : 'Needs Decision',
+                'next_step' => $project->phase,
+                'date_range' => $this->dateRange($activeTask),
+                'approvals_pending' => $project->approvals->where('status', 'pending')->count(),
+                'payments_paid' => $this->money($paymentsPaid),
+                'payments_total' => $this->money($paymentsTotal),
+                'payment_percent' => $paymentsTotal > 0 ? (int) round(($paymentsPaid / $paymentsTotal) * 100) : 0,
+                'latest_update' => $project->latest_update,
+                'next_step_copy' => $project->next_step,
+            ],
+            'updates' => $media->map(fn (MediaAsset $asset) => [
+                'title' => $asset->alt_text ?? 'Project Update',
+                'date' => $asset->created_at->format('M j'),
+                'image_url' => asset('storage/'.$asset->path),
+            ])->values(),
         ];
     }
 
@@ -261,6 +427,32 @@ final class ProjectVistaData
         ];
     }
 
+    private function dashboardProjectRow(Project $project, User $user): array
+    {
+        $paymentsTotal = (float) ($project->contract_amount ?? $project->paymentMilestones->sum('amount'));
+        $paymentsPaid = (float) $project->paymentMilestones->where('status', 'paid')->sum('amount');
+        $task = $project->timelineTasks->firstWhere('status', 'in_progress')
+            ?? $project->timelineTasks->firstWhere('status', 'blocked')
+            ?? $project->timelineTasks->first();
+
+        return [
+            'id' => $project->id,
+            'name' => $project->name,
+            'code' => '#PV-'.str_pad((string) (1000 + $project->id), 4, '0', STR_PAD_LEFT),
+            'slug' => $project->slug,
+            'location' => "{$project->city}, {$project->state}",
+            'progress' => $project->percent_complete,
+            'next_step' => $task?->title ?? $project->phase,
+            'date_range' => $this->dateRange($task),
+            'approvals' => $project->approvals->where('status', 'pending')->count(),
+            'payment_percent' => $paymentsTotal > 0 ? (int) round(($paymentsPaid / $paymentsTotal) * 100) : 0,
+            'payment_paid' => $this->money($paymentsPaid),
+            'payment_total' => $this->money($paymentsTotal),
+            'messages' => $this->unreadMessages(collect([$project]), $user, $this->roleFor($user, $project, $project->company)),
+            'hero_image_url' => $project->hero_image_path ? asset('storage/'.$project->hero_image_path) : null,
+        ];
+    }
+
     private function roleFor(User $user, ?Project $project, ?Company $company): string
     {
         if ($user->isSuperAdmin()) {
@@ -289,13 +481,87 @@ final class ProjectVistaData
     /**
      * @param  Collection<int, Project>  $projects
      */
-    private function stats(Collection $projects): array
+    private function stats(Collection $projects, ?User $user = null, string $role = 'viewer'): array
     {
+        $payments = $projects->flatMap->paymentMilestones;
+        $paymentsTotal = (float) $projects->sum(fn (Project $project) => (float) ($project->contract_amount ?? $project->paymentMilestones->sum('amount')));
+        $paymentsCollected = (float) $payments->where('status', 'paid')->sum('amount');
+        $approvalsProjects = $projects
+            ->filter(fn (Project $project) => $project->approvals->where('status', 'pending')->isNotEmpty())
+            ->count();
+
         return [
             'active_projects' => $projects->where('status', 'active')->count(),
             'pending_approvals' => $projects->flatMap->approvals->where('status', 'pending')->count(),
             'pending_selections' => $projects->flatMap->selections->where('status', 'waiting_client')->count(),
             'blocked_tasks' => $projects->flatMap->timelineTasks->where('status', 'blocked')->count(),
+            'average_progress' => $projects->count() > 0 ? (int) round($projects->avg('percent_complete')) : 0,
+            'projects_with_approvals' => $approvalsProjects,
+            'payments_collected' => $paymentsCollected,
+            'payments_total' => $paymentsTotal,
+            'payment_percent' => $paymentsTotal > 0 ? (int) round(($paymentsCollected / $paymentsTotal) * 100) : 0,
+            'unread_messages' => $user ? $this->unreadMessages($projects, $user, $role) : 0,
         ];
+    }
+
+    /**
+     * @param  Collection<int, Project>  $projects
+     */
+    private function unreadMessages(Collection $projects, User $user, string $role): int
+    {
+        if ($role === Roles::SUBCONTRACTOR) {
+            return 0;
+        }
+
+        $threadIds = $projects->flatMap->messageThreads->pluck('id');
+
+        if ($threadIds->isEmpty()) {
+            return 0;
+        }
+
+        $lastReadByThread = DB::table('message_reads')
+            ->where('user_id', $user->id)
+            ->whereIn('message_thread_id', $threadIds)
+            ->pluck('last_read_at', 'message_thread_id');
+
+        return $projects->flatMap->messageThreads->flatMap->messages
+            ->filter(function ($message) use ($user, $role, $lastReadByThread): bool {
+                if ($message->user_id === $user->id) {
+                    return false;
+                }
+
+                if (isset($lastReadByThread[$message->message_thread_id]) && $message->created_at->lte($lastReadByThread[$message->message_thread_id])) {
+                    return false;
+                }
+
+                $authorProjectRole = $message->author->projectRole($message->project_id);
+
+                return $role === Roles::CLIENT
+                    ? $authorProjectRole !== Roles::CLIENT
+                    : $authorProjectRole === Roles::CLIENT;
+            })
+            ->count();
+    }
+
+    private function dateRange(?TimelineTask $task): ?string
+    {
+        if (! $task?->starts_on && ! $task?->due_on) {
+            return null;
+        }
+
+        if (! $task->starts_on) {
+            return $task->due_on?->format('M j');
+        }
+
+        if (! $task->due_on) {
+            return $task->starts_on->format('M j');
+        }
+
+        return $task->starts_on->format('M j').' – '.$task->due_on->format('M j');
+    }
+
+    private function money(float|int|string|null $amount): string
+    {
+        return '$'.number_format((float) $amount, 0);
     }
 }
