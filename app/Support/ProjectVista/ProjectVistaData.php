@@ -58,6 +58,36 @@ final class ProjectVistaData
         ];
     }
 
+    public function projectIndex(User $user): array
+    {
+        $role = $this->defaultRoleFor($user);
+        $projects = $this->projectIndexProjects($user, $role);
+        $primaryProject = $projects->first();
+        $stats = $this->stats($projects, $user, $role);
+        $copy = $this->projectIndexCopy($role);
+        $rows = $projects
+            ->map(fn (Project $project) => $role === Roles::SUBCONTRACTOR
+                ? $this->subcontractorProjectIndexRow($project, $user)
+                : $this->projectIndexRow($project, $user))
+            ->values();
+
+        return [
+            'role' => $role,
+            'title' => $copy['title'],
+            'eyebrow' => $copy['eyebrow'],
+            'subtitle' => $copy['subtitle'],
+            'primaryProject' => $primaryProject ? $this->project($primaryProject, $user) : null,
+            'metrics' => $this->projectIndexMetrics($projects, $stats, $role),
+            'rows' => $rows,
+            'filters' => $this->projectIndexFilters($rows),
+            'navBadges' => [
+                'messaging' => $stats['unread_messages'],
+                'approvals' => $stats['pending_approvals'],
+            ],
+            'totalCount' => $projects->count(),
+        ];
+    }
+
     /**
      * @param  Collection<int, Project>  $projects
      */
@@ -257,6 +287,7 @@ final class ProjectVistaData
         $internal = in_array($role, ['super_admin', Roles::COMPANY_ADMIN, Roles::COMPANY_MANAGER], true);
         $client = $role === Roles::CLIENT;
         $subcontractor = $role === Roles::SUBCONTRACTOR;
+        $clientUser = $project->users->first(fn (User $projectUser) => $projectUser->pivot->role === Roles::CLIENT);
 
         return [
             'id' => $project->id,
@@ -267,6 +298,11 @@ final class ProjectVistaData
                 'id' => $project->manager->id,
                 'name' => $project->manager->name,
                 'email' => $project->manager->email,
+            ] : null,
+            'client' => $clientUser ? [
+                'id' => $clientUser->id,
+                'name' => $clientUser->name,
+                'email' => $clientUser->email,
             ] : null,
             'address' => "{$project->address_line}, {$project->city}, {$project->state}",
             'project_type' => $project->project_type,
@@ -287,6 +323,7 @@ final class ProjectVistaData
                 'can_manage_standards' => in_array($role, ['super_admin', Roles::COMPANY_ADMIN], true),
                 'can_message' => ! $subcontractor,
                 'can_view_payments' => ! $subcontractor,
+                'can_upload_documents' => $this->canUploadDocuments($user, $project, $role),
             ],
             'timeline' => $project->timelineTasks
                 ->filter(fn (TimelineTask $task) => $internal || ($client && $task->client_visible) || ($subcontractor && $task->subcontractor_visible))
@@ -350,9 +387,11 @@ final class ProjectVistaData
                     'category' => $document->category,
                     'visibility' => $document->visibility,
                     'version' => $document->version,
+                    'mime_type' => $document->mime_type,
+                    'size' => $document->size,
                     'client_visible' => $document->client_visible,
                     'subcontractor_visible' => $document->subcontractor_visible,
-                    'url' => asset('storage/'.$document->path),
+                    'url' => route('projects.documents.show', [$project, $document]),
                     'uploaded_by' => $document->uploader?->name,
                     'updated_at' => $document->updated_at->toFormattedDateString(),
                 ])->values(),
@@ -392,6 +431,174 @@ final class ProjectVistaData
         }
 
         return $user->companies->map(fn (Company $company) => $this->company($company))->all();
+    }
+
+    private function defaultRoleFor(User $user): string
+    {
+        if ($user->isSuperAdmin()) {
+            return 'super_admin';
+        }
+
+        $companyRoles = DB::table('company_user')
+            ->where('user_id', $user->id)
+            ->pluck('role');
+
+        if ($companyRoles->contains(Roles::COMPANY_ADMIN)) {
+            return Roles::COMPANY_ADMIN;
+        }
+
+        if ($companyRoles->contains(Roles::COMPANY_MANAGER)) {
+            return Roles::COMPANY_MANAGER;
+        }
+
+        $projectRoles = DB::table('project_user')
+            ->where('user_id', $user->id)
+            ->pluck('role');
+
+        if ($projectRoles->contains(Roles::CLIENT)) {
+            return Roles::CLIENT;
+        }
+
+        if ($projectRoles->contains(Roles::SUBCONTRACTOR)) {
+            return Roles::SUBCONTRACTOR;
+        }
+
+        return 'viewer';
+    }
+
+    /**
+     * @return Collection<int, Project>
+     */
+    private function projectIndexProjects(User $user, string $role): Collection
+    {
+        $query = Project::query()
+            ->with([
+                'company',
+                'manager',
+                'approvals',
+                'selections',
+                'timelineTasks',
+                'paymentMilestones',
+                'messageThreads.messages.author',
+                'users',
+            ])
+            ->latest();
+
+        if ($role === 'super_admin') {
+            return $query->get();
+        }
+
+        if ($role === Roles::COMPANY_ADMIN) {
+            $companyIds = DB::table('company_user')
+                ->where('user_id', $user->id)
+                ->where('role', Roles::COMPANY_ADMIN)
+                ->select('company_id');
+
+            return $query->whereIn('company_id', $companyIds)->get();
+        }
+
+        if ($role === Roles::COMPANY_MANAGER) {
+            $assignedProjectIds = DB::table('project_user')
+                ->where('user_id', $user->id)
+                ->where('role', Roles::COMPANY_MANAGER)
+                ->select('project_id');
+
+            return $query
+                ->where(function ($query) use ($assignedProjectIds, $user): void {
+                    $query
+                        ->where('manager_id', $user->id)
+                        ->orWhereIn('id', $assignedProjectIds);
+                })
+                ->get();
+        }
+
+        if (in_array($role, [Roles::CLIENT, Roles::SUBCONTRACTOR], true)) {
+            $assignedProjectIds = DB::table('project_user')
+                ->where('user_id', $user->id)
+                ->where('role', $role)
+                ->select('project_id');
+
+            return $query->whereIn('id', $assignedProjectIds)->get();
+        }
+
+        return $query->forUser($user)->get();
+    }
+
+    private function projectIndexCopy(string $role): array
+    {
+        return match ($role) {
+            'super_admin' => [
+                'eyebrow' => 'Super Admin',
+                'title' => 'Projects',
+                'subtitle' => 'All active projects across ProjectVista tenants.',
+            ],
+            Roles::COMPANY_ADMIN => [
+                'eyebrow' => 'Company Admin',
+                'title' => 'Projects',
+                'subtitle' => 'All active company projects. Click a project to view or edit customer and project information.',
+            ],
+            Roles::COMPANY_MANAGER => [
+                'eyebrow' => 'Company Manager',
+                'title' => 'Projects',
+                'subtitle' => 'Projects assigned to you. Click a project to update customer-facing details, milestones, selections, approvals, and documents.',
+            ],
+            Roles::SUBCONTRACTOR => [
+                'eyebrow' => 'Subcontractor',
+                'title' => 'Projects',
+                'subtitle' => 'Assigned projects only. Review schedule windows, current tasks, approved selections, and visible project documents.',
+            ],
+            default => [
+                'eyebrow' => 'ProjectVista',
+                'title' => 'Projects',
+                'subtitle' => 'Projects available to your account.',
+            ],
+        };
+    }
+
+    /**
+     * @param  Collection<int, Project>  $projects
+     */
+    private function projectIndexMetrics(Collection $projects, array $stats, string $role): array
+    {
+        if ($role === Roles::SUBCONTRACTOR) {
+            $visibleTasks = $projects->flatMap->timelineTasks
+                ->filter(fn (TimelineTask $task) => $task->subcontractor_visible);
+
+            return [
+                ['label' => 'Assigned Projects', 'value' => $projects->where('status', 'active')->count(), 'detail' => 'Active Projects'],
+                ['label' => 'Tasks This Week', 'value' => $visibleTasks->whereBetween('due_on', [now()->startOfWeek(), now()->endOfWeek()])->count(), 'detail' => 'Across All Projects'],
+                ['label' => 'Upcoming Tasks', 'value' => $visibleTasks->whereIn('status', ['upcoming', 'scheduled'])->count(), 'detail' => 'On-Site Tasks', 'tone' => 'gold'],
+                ['label' => 'Pending Approvals', 'value' => $visibleTasks->where('requires_acknowledgement', true)->count(), 'detail' => 'Waiting on Others'],
+            ];
+        }
+
+        return [
+            ['label' => $role === Roles::COMPANY_MANAGER ? 'My Projects' : 'Total Projects', 'value' => $stats['active_projects'], 'detail' => 'Open Projects'],
+            ['label' => 'Avg. Progress', 'value' => $stats['average_progress'].'%', 'detail' => $role === Roles::COMPANY_MANAGER ? '↑ 4% vs last 30 days' : '↑ 8% vs last 30 days', 'tone' => 'gold'],
+            ['label' => 'Approvals Needed', 'value' => $stats['pending_approvals'], 'detail' => 'Across '.$stats['projects_with_approvals'].' Projects'],
+            ['label' => $role === Roles::COMPANY_MANAGER ? 'Payments Tracked' : 'Payments Collected', 'value' => $this->money($stats['payments_collected']), 'detail' => $stats['payment_percent'].'% of '.$this->money($stats['payments_total']), 'tone' => 'gold'],
+            ['label' => 'Unread Messages', 'value' => $stats['unread_messages'], 'detail' => 'From Clients'],
+        ];
+    }
+
+    /**
+     * @param  Collection<int, array<string, mixed>>  $rows
+     */
+    private function projectIndexFilters(Collection $rows): array
+    {
+        return [
+            'statuses' => $rows->pluck('status_label')->filter()->unique()->values(),
+            'managers' => $rows
+                ->filter(fn (array $row) => isset($row['manager_id'], $row['manager']))
+                ->map(fn (array $row) => ['id' => $row['manager_id'], 'name' => $row['manager']])
+                ->unique('id')
+                ->values(),
+            'clients' => $rows
+                ->filter(fn (array $row) => isset($row['client_id'], $row['client']))
+                ->map(fn (array $row) => ['id' => $row['client_id'], 'name' => $row['client']])
+                ->unique('id')
+                ->values(),
+        ];
     }
 
     private function company(Company $company): array
@@ -451,6 +658,78 @@ final class ProjectVistaData
             'messages' => $this->unreadMessages(collect([$project]), $user, $this->roleFor($user, $project, $project->company)),
             'hero_image_url' => $project->hero_image_path ? asset('storage/'.$project->hero_image_path) : null,
         ];
+    }
+
+    private function projectIndexRow(Project $project, User $user): array
+    {
+        $row = $this->dashboardProjectRow($project, $user);
+        $client = $project->users->first(fn (User $projectUser) => $projectUser->pivot->role === Roles::CLIENT);
+
+        return [
+            ...$row,
+            'manager' => $project->manager?->name,
+            'manager_id' => $project->manager?->id,
+            'client' => $client?->name,
+            'client_id' => $client?->id,
+            'status' => $project->status,
+            'health_status' => $project->health_status,
+            'status_label' => $this->projectStatusLabel($project),
+        ];
+    }
+
+    private function subcontractorProjectIndexRow(Project $project, User $user): array
+    {
+        $task = $project->timelineTasks
+            ->filter(fn (TimelineTask $task) => $task->subcontractor_visible)
+            ->firstWhere('status', 'in_progress')
+            ?? $project->timelineTasks
+                ->filter(fn (TimelineTask $task) => $task->subcontractor_visible)
+                ->firstWhere('status', 'upcoming')
+            ?? $project->timelineTasks
+                ->filter(fn (TimelineTask $task) => $task->subcontractor_visible)
+                ->first();
+
+        return [
+            'id' => $project->id,
+            'name' => $project->name,
+            'code' => '#PV-'.str_pad((string) (1000 + $project->id), 4, '0', STR_PAD_LEFT),
+            'slug' => $project->slug,
+            'location' => "{$project->city}, {$project->state}",
+            'progress' => $project->percent_complete,
+            'role_label' => $project->users->firstWhere('id', $user->id)?->pivot?->assigned_scope ?: 'Assigned Trade Partner',
+            'current_task' => $task?->title ?? $project->phase,
+            'start_date' => $task?->starts_on?->format('M j'),
+            'due_date' => $task?->due_on?->format('M j'),
+            'work_status' => in_array($task?->status, ['upcoming', 'scheduled'], true) ? 'Upcoming' : 'In Progress',
+            'status_label' => in_array($task?->status, ['upcoming', 'scheduled'], true) ? 'Upcoming' : 'In Progress',
+            'status' => $project->status,
+            'health_status' => $project->health_status,
+            'hero_image_url' => $project->hero_image_path ? asset('storage/'.$project->hero_image_path) : null,
+        ];
+    }
+
+    private function projectStatusLabel(Project $project): string
+    {
+        if ($project->approvals->where('status', 'pending')->isNotEmpty() && $project->health_status !== 'on_track') {
+            return 'Needs Approval';
+        }
+
+        if ($project->percent_complete >= 85 || $project->health_status === 'on_track') {
+            return $project->percent_complete >= 85 ? 'On Schedule' : 'In Progress';
+        }
+
+        if ($project->health_status === 'at_risk') {
+            return 'Needs Approval';
+        }
+
+        return 'In Progress';
+    }
+
+    private function canUploadDocuments(User $user, Project $project, string $role): bool
+    {
+        return $user->isSuperAdmin()
+            || in_array($role, [Roles::COMPANY_ADMIN, Roles::COMPANY_MANAGER], true)
+            || $user->projectRole($project) === Roles::CLIENT;
     }
 
     private function roleFor(User $user, ?Project $project, ?Company $company): string

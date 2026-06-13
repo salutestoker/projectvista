@@ -42,6 +42,41 @@ export interface DashboardMetricPayload {
     tone?: 'default' | 'gold';
 }
 
+export interface ProjectIndexRowPayload {
+    id: number;
+    name: string;
+    code: string;
+    slug: string;
+    location: string;
+    progress: number;
+    status: string;
+    health_status: string;
+    status_label: string;
+    hero_image_url?: string | null;
+    manager?: string | null;
+    manager_id?: number | null;
+    client?: string | null;
+    client_id?: number | null;
+    next_step?: string;
+    date_range?: string | null;
+    approvals?: number;
+    payment_percent?: number;
+    payment_paid?: string;
+    payment_total?: string;
+    messages?: number;
+    role_label?: string;
+    current_task?: string;
+    start_date?: string | null;
+    due_date?: string | null;
+    work_status?: string;
+}
+
+export interface ProjectIndexFiltersPayload {
+    statuses: string[];
+    managers: { id: number; name: string }[];
+    clients: { id: number; name: string }[];
+}
+
 export interface DashboardProjectRowPayload {
     id: number;
     name: string;
@@ -190,6 +225,8 @@ export interface DocumentPayload {
     category: string;
     visibility: string;
     version: number;
+    mime_type?: string | null;
+    size?: number | null;
     client_visible: boolean;
     subcontractor_visible: boolean;
     url: string;
@@ -221,6 +258,11 @@ export interface ProjectPayload {
         name: string;
         email: string;
     } | null;
+    client?: {
+        id: number;
+        name: string;
+        email: string;
+    } | null;
     address: string;
     project_type: string;
     status: string;
@@ -240,6 +282,7 @@ export interface ProjectPayload {
         can_manage_standards: boolean;
         can_message: boolean;
         can_view_payments: boolean;
+        can_upload_documents: boolean;
     };
     timeline: TimelineTaskPayload[];
     selections: SelectionPayload[];

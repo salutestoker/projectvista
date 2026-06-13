@@ -30,6 +30,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/companies/{company:slug}/admin', [CompanyAdminController::class, 'show'])->name('companies.admin');
     Route::post('/companies/{company:slug}/invitations', [CompanyAdminController::class, 'invite'])->name('companies.invitations.store');
 
+    Route::get('/storage/project-documents/{projectId}/{filename}', [ProjectController::class, 'showDocumentFromStoragePath'])
+        ->whereNumber('projectId')
+        ->where('filename', '[^/]+')
+        ->name('projects.documents.storage');
+
+    Route::get('/projects', [ProjectController::class, 'index'])->name('projects.index');
     Route::get('/projects/{project:slug}', [ProjectController::class, 'show'])->name('projects.show');
     Route::get('/projects/{project:slug}/timeline', [ProjectController::class, 'timeline'])->name('projects.timeline');
     Route::patch('/projects/{project:slug}/timeline/reorder', [ProjectController::class, 'reorderTimeline'])->name('projects.timeline.reorder');
@@ -37,6 +43,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/projects/{project:slug}/approvals', [ProjectController::class, 'approvals'])->name('projects.approvals');
     Route::get('/projects/{project:slug}/payments', [ProjectController::class, 'payments'])->name('projects.payments');
     Route::get('/projects/{project:slug}/documents', [ProjectController::class, 'documents'])->name('projects.documents');
+    Route::post('/projects/{project:slug}/documents', [ProjectController::class, 'storeDocument'])->name('projects.documents.store');
+    Route::get('/projects/{project:slug}/documents/{document}', [ProjectController::class, 'showDocument'])->name('projects.documents.show');
     Route::get('/projects/{project:slug}/messages', [ProjectController::class, 'messages'])->name('projects.messages');
 
     Route::patch('/selections/{selection}/response', [ProjectController::class, 'respondSelection'])->name('selections.response');

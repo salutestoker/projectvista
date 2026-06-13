@@ -100,7 +100,10 @@ export function ProjectVistaShell({
                   {
                       key: 'projects',
                       label: role === 'client' ? 'Project' : 'Projects',
-                      href: route('projects.show', project.slug),
+                      href:
+                          role === 'client'
+                              ? route('projects.show', project.slug)
+                              : route('projects.index'),
                       Icon: FolderKanban,
                   },
                   {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Policies;
 
+use App\Models\Project;
 use App\Models\ProjectDocument;
 use App\Models\User;
 use App\Support\ProjectVista\Roles;
@@ -27,6 +28,15 @@ final class ProjectDocumentPolicy
     {
         return $user->isSuperAdmin()
             || $user->companies()->wherePivotIn('role', Roles::INTERNAL_ROLES)->exists();
+    }
+
+    public function upload(User $user, Project $project): bool
+    {
+        if ($user->isSuperAdmin() || in_array($user->companyRole($project->company_id), Roles::INTERNAL_ROLES, true)) {
+            return true;
+        }
+
+        return $user->projectRole($project) === Roles::CLIENT;
     }
 
     public function update(User $user, ProjectDocument $projectDocument): bool
