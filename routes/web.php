@@ -1,0 +1,49 @@
+<?php
+
+use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\ProjectVista\CompanyAdminController;
+use App\Http\Controllers\ProjectVista\DashboardController;
+use App\Http\Controllers\ProjectVista\ProjectController;
+use App\Http\Controllers\ProjectVista\SuperAdminController;
+use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\Route;
+use Inertia\Inertia;
+
+Route::get('/', function () {
+    return Inertia::render('Welcome', [
+        'canLogin' => Route::has('login'),
+        'canRegister' => Route::has('register'),
+        'laravelVersion' => Application::VERSION,
+        'phpVersion' => PHP_VERSION,
+    ]);
+});
+
+Route::middleware(['auth', 'verified'])->group(function () {
+    Route::get('/dashboard', DashboardController::class)->name('dashboard');
+    Route::get('/admin/command-center', SuperAdminController::class)->name('super-admin.dashboard');
+
+    Route::get('/companies/{company:slug}/admin', [CompanyAdminController::class, 'show'])->name('companies.admin');
+    Route::post('/companies/{company:slug}/invitations', [CompanyAdminController::class, 'invite'])->name('companies.invitations.store');
+
+    Route::get('/projects/{project:slug}', [ProjectController::class, 'show'])->name('projects.show');
+    Route::get('/projects/{project:slug}/timeline', [ProjectController::class, 'timeline'])->name('projects.timeline');
+    Route::patch('/projects/{project:slug}/timeline/reorder', [ProjectController::class, 'reorderTimeline'])->name('projects.timeline.reorder');
+    Route::get('/projects/{project:slug}/selections', [ProjectController::class, 'selections'])->name('projects.selections');
+    Route::get('/projects/{project:slug}/approvals', [ProjectController::class, 'approvals'])->name('projects.approvals');
+    Route::get('/projects/{project:slug}/payments', [ProjectController::class, 'payments'])->name('projects.payments');
+    Route::get('/projects/{project:slug}/documents', [ProjectController::class, 'documents'])->name('projects.documents');
+    Route::get('/projects/{project:slug}/messages', [ProjectController::class, 'messages'])->name('projects.messages');
+
+    Route::patch('/selections/{selection}/response', [ProjectController::class, 'respondSelection'])->name('selections.response');
+    Route::patch('/approvals/{approval}/response', [ProjectController::class, 'respondApproval'])->name('approvals.response');
+    Route::patch('/payment-milestones/{paymentMilestone}/complete', [ProjectController::class, 'completePayment'])->name('payment-milestones.complete');
+    Route::post('/message-threads/{thread}/messages', [ProjectController::class, 'storeMessage'])->name('message-threads.messages.store');
+});
+
+Route::middleware('auth')->group(function () {
+    Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
+    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
+    Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+});
+
+require __DIR__.'/auth.php';

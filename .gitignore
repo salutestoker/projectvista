@@ -1,0 +1,47 @@
+# OS and editor metadata
+.DS_Store
+Thumbs.db
+/.cursor/
+/.idea/
+/.nova/
+/.vscode/
+/.zed/
+
+# Local agent/tooling state
+/.codex/
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+/auth.json
+
+# Dependencies
+/node_modules/
+/vendor/
+
+# Laravel generated files
+/.phpunit.cache/
+.phpunit.result.cache
+.pint.cache
+.phpactor.json
+_ide_helper.php
+/public/build/
+/public/fonts-manifest.dev.json
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail/
+
+# Logs and package-manager debug output
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local databases and legacy VM config
+*.sqlite
+*.sqlite-*
+Homestead.json
+Homestead.yaml
