@@ -1,9 +1,18 @@
 import { ProjectCard } from '@/Components/ProjectVista/ProjectCard';
 import { ProjectVistaShell } from '@/Components/ProjectVista/ProjectVistaShell';
 import { StatusPill } from '@/Components/ProjectVista/StatusPill';
+import { Button } from '@/Components/ui/button';
+import { Input } from '@/Components/ui/input';
+import {
+    Select,
+    SelectContent,
+    SelectGroup,
+    SelectItem,
+    SelectTrigger,
+} from '@/Components/ui/select';
 import { CompanyPayload, ProjectCardPayload } from '@/types/projectvista';
 import { Head, useForm } from '@inertiajs/react';
-import { FormEvent } from 'react';
+import { FormEvent, ReactNode } from 'react';
 
 interface CompanyAdminProps {
     company: CompanyPayload;
@@ -19,21 +28,34 @@ interface CompanyAdminProps {
         id: number;
         email: string;
         role: string;
+        subcontractor_type?: string | null;
         status: string;
         expires_at?: string | null;
     }[];
+    subcontractor_types: {
+        id: number;
+        name: string;
+    }[];
 }
+
+const invitationRoles = [
+    { value: 'client', label: 'Client/Homeowner' },
+    { value: 'company_manager', label: 'Company Manager' },
+    { value: 'subcontractor', label: 'Sub-Contractor' },
+];
 
 export default function CompanyAdmin({
     company,
     users,
     projects,
     invitations,
+    subcontractor_types,
 }: CompanyAdminProps) {
     const { data, setData, post, processing, errors, reset } = useForm({
         email: '',
         role: 'client',
         project_id: projects[0]?.id?.toString() ?? '',
+        subcontractor_type_id: '',
     });
 
     const submit = (event: FormEvent) => {
@@ -42,6 +64,13 @@ export default function CompanyAdmin({
             onSuccess: () => reset('email'),
         });
     };
+    const selectedRoleLabel =
+        invitationRoles.find((role) => role.value === data.role)?.label ??
+        'Client/Homeowner';
+    const selectedSubcontractorTypeLabel =
+        subcontractor_types.find(
+            (type) => type.id.toString() === data.subcontractor_type_id,
+        )?.name ?? 'Select Sub-Contractor Type';
 
     return (
         <ProjectVistaShell
@@ -118,14 +147,14 @@ export default function CompanyAdmin({
                         >
                             Email
                         </label>
-                        <input
+                        <Input
                             id="email"
                             type="email"
                             value={data.email}
                             onChange={(event) =>
                                 setData('email', event.target.value)
                             }
-                            className="mt-2 w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-white"
+                            className="mt-2"
                         />
                         {errors.email && (
                             <p className="mt-2 text-sm text-rose-300">
@@ -139,30 +168,91 @@ export default function CompanyAdmin({
                         >
                             Role
                         </label>
-                        <select
-                            id="role"
+                        <Select
                             value={data.role}
-                            onChange={(event) =>
-                                setData('role', event.target.value)
-                            }
-                            className="mt-2 w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-white"
+                            onValueChange={(value) => {
+                                const role = String(value);
+                                setData({
+                                    ...data,
+                                    role,
+                                    subcontractor_type_id:
+                                        role === 'subcontractor'
+                                            ? data.subcontractor_type_id ||
+                                              subcontractor_types[0]?.id?.toString() ||
+                                              ''
+                                            : '',
+                                });
+                            }}
                         >
-                            <option value="client">Client/Homeowner</option>
-                            <option value="company_manager">
-                                Company Manager
-                            </option>
-                            <option value="subcontractor">
-                                Sub-Contractor
-                            </option>
-                        </select>
+                            <SelectTrigger className="mt-2 w-full data-[size=default]:h-11">
+                                <SelectedSelectLabel>
+                                    {selectedRoleLabel}
+                                </SelectedSelectLabel>
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectGroup>
+                                    {invitationRoles.map((role) => (
+                                        <SelectItem
+                                            key={role.value}
+                                            value={role.value}
+                                        >
+                                            {role.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectGroup>
+                            </SelectContent>
+                        </Select>
 
-                        <button
+                        {data.role === 'subcontractor' ? (
+                            <>
+                                <label
+                                    className="mt-4 block text-sm text-white/60"
+                                    htmlFor="subcontractor_type"
+                                >
+                                    Sub-Contractor Type
+                                </label>
+                                <Select
+                                    value={data.subcontractor_type_id}
+                                    onValueChange={(value) =>
+                                        setData(
+                                            'subcontractor_type_id',
+                                            String(value),
+                                        )
+                                    }
+                                >
+                                    <SelectTrigger className="mt-2 w-full data-[size=default]:h-11">
+                                        <SelectedSelectLabel>
+                                            {selectedSubcontractorTypeLabel}
+                                        </SelectedSelectLabel>
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectGroup>
+                                            {subcontractor_types.map((type) => (
+                                                <SelectItem
+                                                    key={type.id}
+                                                    value={type.id.toString()}
+                                                >
+                                                    {type.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectGroup>
+                                    </SelectContent>
+                                </Select>
+                                {errors.subcontractor_type_id && (
+                                    <p className="mt-2 text-sm text-rose-300">
+                                        {errors.subcontractor_type_id}
+                                    </p>
+                                )}
+                            </>
+                        ) : null}
+
+                        <Button
                             type="submit"
                             disabled={processing}
-                            className="mt-5 w-full rounded-md bg-[#d6b36a] px-4 py-2 text-sm font-semibold text-black transition hover:bg-[#f0d58c] disabled:opacity-50"
+                            className="mt-5 w-full"
                         >
                             {processing ? 'Creating...' : 'Create invite'}
-                        </button>
+                        </Button>
                     </form>
 
                     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
@@ -179,8 +269,11 @@ export default function CompanyAdmin({
                                         {invitation.email}
                                     </div>
                                     <div className="mt-1 text-xs text-white/50">
-                                        {invitation.role} · expires{' '}
-                                        {invitation.expires_at}
+                                        {invitation.role}
+                                        {invitation.subcontractor_type
+                                            ? ` · ${invitation.subcontractor_type}`
+                                            : ''}{' '}
+                                        · expires {invitation.expires_at}
                                     </div>
                                 </div>
                             ))}
@@ -189,5 +282,16 @@ export default function CompanyAdmin({
                 </aside>
             </div>
         </ProjectVistaShell>
+    );
+}
+
+function SelectedSelectLabel({ children }: { children: ReactNode }) {
+    return (
+        <span
+            data-slot="select-value"
+            className="flex flex-1 items-center text-left"
+        >
+            {children}
+        </span>
     );
 }

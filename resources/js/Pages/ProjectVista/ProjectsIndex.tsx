@@ -10,7 +10,6 @@ import {
     SelectGroup,
     SelectItem,
     SelectTrigger,
-    SelectValue,
 } from '@/Components/ui/select';
 import {
     Table,
@@ -149,7 +148,7 @@ export default function ProjectsIndex({
                             <FilterSelect
                                 value={status}
                                 onChange={setStatus}
-                                label="All Status"
+                                label="All Statuses"
                                 options={filters.statuses}
                             />
                             {role === 'company_admin' ||
@@ -243,13 +242,29 @@ function FilterSelect({
     label: string;
     options: (string | { value: string; label: string })[];
 }) {
+    const selectedLabel =
+        value === 'all'
+            ? label
+            : options
+                  .map((option) =>
+                      typeof option === 'string'
+                          ? { value: option, label: option }
+                          : option,
+                  )
+                  .find((option) => option.value === value)?.label;
+
     return (
         <Select
             value={value}
             onValueChange={(nextValue) => onChange(String(nextValue ?? 'all'))}
         >
             <SelectTrigger className="h-11 min-w-40 px-4 data-[size=default]:h-11">
-                <SelectValue />
+                <span
+                    data-slot="select-value"
+                    className="flex flex-1 items-center text-left"
+                >
+                    {selectedLabel ?? label}
+                </span>
             </SelectTrigger>
             <SelectContent>
                 <SelectGroup>

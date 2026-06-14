@@ -170,17 +170,75 @@ export type DashboardHomePayload =
 
 export interface TimelineTaskPayload {
     id: number;
+    project_id?: number | null;
+    project_name?: string | null;
+    project_slug?: string | null;
+    project_code?: string | null;
     title: string;
     phase: string;
     description?: string | null;
     sort_order: number;
     status: string;
     starts_on?: string | null;
+    starts_on_input?: string | null;
     due_on?: string | null;
+    due_on_input?: string | null;
     completed_on?: string | null;
     client_visible: boolean;
     subcontractor_visible: boolean;
     requires_acknowledgement: boolean;
+    assigned_subcontractor_id?: number | null;
+    assigned_subcontractor_name?: string | null;
+    subcontractor_type_id?: number | null;
+    subcontractor_type_name?: string | null;
+    progress?: number;
+    date_range?: string;
+}
+
+export interface TimelineConflictPayload {
+    type: string;
+    label: string;
+    project_name: string;
+    conflicting_project_name?: string | null;
+    task_title: string;
+    date_range: string;
+    subcontractor_name?: string | null;
+}
+
+export interface TimelineWorkspacePayload {
+    role: ProjectVistaRole | 'super_admin' | 'viewer';
+    can_edit: boolean;
+    scope_label: string;
+    metrics: {
+        open_tasks: number;
+        conflicts: number;
+        due_this_week: number;
+        sub_types: number;
+    };
+    filters: {
+        projects: {
+            id: number;
+            name: string;
+            slug: string;
+        }[];
+        subcontractor_types: {
+            id: number;
+            name: string;
+        }[];
+        statuses: {
+            value: string;
+            label: string;
+        }[];
+    };
+    tasks: TimelineTaskPayload[];
+    subcontractors: {
+        id: number;
+        name: string;
+        email: string;
+        title?: string | null;
+        subcontractor_type_id?: number | null;
+    }[];
+    conflicts: TimelineConflictPayload[];
 }
 
 export interface SelectionPayload {

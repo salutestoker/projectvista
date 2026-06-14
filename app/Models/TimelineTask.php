@@ -13,6 +13,8 @@ final class TimelineTask extends Model
         'company_id',
         'project_id',
         'timeline_template_id',
+        'assigned_subcontractor_id',
+        'subcontractor_type_id',
         'title',
         'phase',
         'description',
@@ -47,6 +49,16 @@ final class TimelineTask extends Model
     public function project(): BelongsTo
     {
         return $this->belongsTo(Project::class);
+    }
+
+    public function assignedSubcontractor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'assigned_subcontractor_id');
+    }
+
+    public function subcontractorType(): BelongsTo
+    {
+        return $this->belongsTo(SubcontractorType::class);
     }
 
     public function template(): BelongsTo

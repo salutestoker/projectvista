@@ -15,6 +15,7 @@ final class Invitation extends Model
         'invited_by_id',
         'email',
         'role',
+        'subcontractor_type_id',
         'token',
         'status',
         'expires_at',
@@ -37,6 +38,11 @@ final class Invitation extends Model
     public function project(): BelongsTo
     {
         return $this->belongsTo(Project::class);
+    }
+
+    public function subcontractorType(): BelongsTo
+    {
+        return $this->belongsTo(SubcontractorType::class);
     }
 
     public function inviter(): BelongsTo

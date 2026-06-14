@@ -15,6 +15,7 @@ use App\Models\Project;
 use App\Models\ProjectDocument;
 use App\Models\Selection;
 use App\Models\SelectionCategory;
+use App\Models\SubcontractorType;
 use App\Models\TimelineTask;
 use App\Models\TimelineTemplate;
 use App\Models\User;
@@ -120,6 +121,9 @@ class DatabaseSeeder extends Seeder
             ],
         ]);
 
+        $subcontractorTypes = $this->seedSubcontractorTypes($company);
+        $this->seedSubcontractorTypes($otherCompany);
+
         $company->users()->attach($companyAdmin->id, [
             'role' => Roles::COMPANY_ADMIN,
             'title' => 'Owner',
@@ -132,7 +136,8 @@ class DatabaseSeeder extends Seeder
         ]);
         $company->users()->attach($subcontractor->id, [
             'role' => Roles::SUBCONTRACTOR,
-            'title' => 'Tile Subcontractor',
+            'title' => 'Tile Pro Solutions',
+            'subcontractor_type_id' => $subcontractorTypes->get('tile-stone')->id,
             'joined_at' => now(),
         ]);
         $otherCompany->users()->attach($otherAdmin->id, [
@@ -140,6 +145,50 @@ class DatabaseSeeder extends Seeder
             'title' => 'Owner',
             'joined_at' => now(),
         ]);
+
+        $omniSubcontractors = collect([
+            'tile-stone' => [
+                'user' => $subcontractor,
+                'title' => 'Tile Pro Solutions',
+                'scope' => 'Tile and waterline coordination',
+                'type' => $subcontractorTypes->get('tile-stone'),
+            ],
+        ]);
+
+        foreach ([
+            ['plumbing', 'Rob Walker', 'plumbing@omnipools.test', 'Precision Plumbing', 'Plumbing rough-in, equipment set, and pressure testing'],
+            ['decking', 'Lisa Hernandez', 'decking@omnipools.test', 'Deck Pro AZ', 'Travertine decking, coping support, and finish layout'],
+            ['electrical', 'Tom Becker', 'electrical@omnipools.test', 'Bright Electric', 'Electrical rough-in, controls, and low-voltage lighting'],
+            ['pool-construction', 'Mike Anderson', 'pool-construction@omnipools.test', 'Aqua Blue Pools', 'Excavation, shell, startup, and balance'],
+            ['landscaping', 'David Green', 'landscape@omnipools.test', 'Eco Landscape', 'Planting, turf, and landscape finish work'],
+            ['hardscape', 'Elena Cruz', 'hardscape@omnipools.test', 'Cruz Hardscape', 'Pavers, retaining walls, and masonry flatwork'],
+            ['irrigation', 'Nate Kim', 'irrigation@omnipools.test', 'Sonoran Irrigation', 'Irrigation, drainage, and water management'],
+            ['outdoor-kitchen', 'Bianca Lee', 'outdoor-kitchen@omnipools.test', 'Desert Flame Outdoor Kitchens', 'Outdoor kitchens, counters, and appliance setting'],
+            ['automation', 'Marcus Bell', 'automation@omnipools.test', 'ClearWater Controls', 'Pool automation, controls, and smart equipment setup'],
+        ] as [$typeSlug, $name, $email, $title, $scope]) {
+            $tradeUser = User::query()->create([
+                'name' => $name,
+                'email' => $email,
+                'password' => $password,
+                'email_verified_at' => now(),
+            ]);
+
+            $type = $subcontractorTypes->get($typeSlug);
+
+            $company->users()->attach($tradeUser->id, [
+                'role' => Roles::SUBCONTRACTOR,
+                'title' => $title,
+                'subcontractor_type_id' => $type->id,
+                'joined_at' => now()->subDays(random_int(30, 180)),
+            ]);
+
+            $omniSubcontractors->put($typeSlug, [
+                'user' => $tradeUser,
+                'title' => $title,
+                'scope' => $scope,
+                'type' => $type,
+            ]);
+        }
 
         $project = Project::query()->create([
             'company_id' => $company->id,
@@ -214,10 +263,18 @@ class DatabaseSeeder extends Seeder
         ];
 
         foreach ($timelineRows as $index => [$title, $phase, $status, $startsOffset, $dueOffset, $subVisible]) {
+            $assignment = $subVisible ? $this->omniSubcontractorForTask($omniSubcontractors, $title.' '.$phase) : null;
+
+            if ($assignment !== null) {
+                $this->attachProjectSubcontractor($project, $assignment);
+            }
+
             TimelineTask::query()->create([
                 'company_id' => $company->id,
                 'project_id' => $project->id,
                 'timeline_template_id' => $timelineTemplate->id,
+                'assigned_subcontractor_id' => $assignment['user']->id ?? null,
+                'subcontractor_type_id' => $assignment['type']->id ?? null,
                 'title' => $title,
                 'phase' => $phase,
                 'description' => $title === 'Decking Approval Needed'
@@ -436,21 +493,27 @@ class DatabaseSeeder extends Seeder
                 'role' => Roles::COMPANY_MANAGER,
                 'assigned_scope' => 'Full project management',
             ]);
-            $extraProject->users()->attach($subcontractor->id, [
-                'role' => Roles::SUBCONTRACTOR,
-                'assigned_scope' => 'Tile Contractor',
-                'permissions' => json_encode(['timeline', 'approved_selections', 'visible_documents']),
-            ]);
+            $projectAssignment = $this->omniSubcontractorForTask($omniSubcontractors, $phase.' '.$projectName);
+            $this->attachProjectSubcontractor($extraProject, $projectAssignment);
+            $this->attachProjectSubcontractor($extraProject, $omniSubcontractors->get('tile-stone'));
 
             foreach ([
                 ['Preconstruction Complete', 'Preconstruction', 'completed', -30, -20, false],
                 [$phase, 'Construction', $progress > 80 ? 'upcoming' : 'in_progress', $startOffset, $dueOffset, true],
                 ['Client Review', 'Finishes', $approvalCount > 1 ? 'blocked' : 'upcoming', $dueOffset + 1, $dueOffset + 4, false],
             ] as $index => [$title, $taskPhase, $status, $startsOffset, $taskDueOffset, $subVisible]) {
+                $assignment = $subVisible ? $this->omniSubcontractorForTask($omniSubcontractors, $title.' '.$phase.' '.$projectName) : null;
+
+                if ($assignment !== null) {
+                    $this->attachProjectSubcontractor($extraProject, $assignment);
+                }
+
                 TimelineTask::query()->create([
                     'company_id' => $company->id,
                     'project_id' => $extraProject->id,
                     'timeline_template_id' => $timelineTemplate->id,
+                    'assigned_subcontractor_id' => $assignment['user']->id ?? null,
+                    'subcontractor_type_id' => $assignment['type']->id ?? null,
                     'title' => $title,
                     'phase' => $taskPhase,
                     'description' => 'Demo milestone for the expanded ProjectVista home dashboard.',
@@ -464,6 +527,23 @@ class DatabaseSeeder extends Seeder
                     'requires_acknowledgement' => $status === 'blocked',
                 ]);
             }
+
+            TimelineTask::query()->create([
+                'company_id' => $company->id,
+                'project_id' => $extraProject->id,
+                'timeline_template_id' => $timelineTemplate->id,
+                'assigned_subcontractor_id' => $subcontractor->id,
+                'subcontractor_type_id' => $subcontractorTypes->get('tile-stone')->id,
+                'title' => 'Tile Detail Review',
+                'phase' => 'Finishes',
+                'description' => 'Shared tile coordination item for the expanded subcontractor demo account.',
+                'sort_order' => 4,
+                'status' => 'upcoming',
+                'starts_on' => now()->addDays($startOffset + 2),
+                'due_on' => now()->addDays($dueOffset + 2),
+                'client_visible' => true,
+                'subcontractor_visible' => true,
+            ]);
 
             $extraSelection = Selection::query()->create([
                 'company_id' => $company->id,
@@ -598,6 +678,9 @@ class DatabaseSeeder extends Seeder
                 'subs' => [
                     ['name' => 'Rafael Ortega', 'email' => 'tile@aurelia.test', 'title' => 'Tile Partner', 'scope' => 'Waterline tile and coping'],
                     ['name' => 'Noah Pierce', 'email' => 'landscape@aurelia.test', 'title' => 'Landscape Partner', 'scope' => 'Planting and lighting'],
+                    ['name' => 'Maya Chen', 'email' => 'plumbing@aurelia.test', 'title' => 'Plumbing Partner', 'scope' => 'Plumbing rough-in and equipment set'],
+                    ['name' => 'Eli Vargas', 'email' => 'electrical@aurelia.test', 'title' => 'Electrical Partner', 'scope' => 'Pool controls and landscape lighting'],
+                    ['name' => 'Sofia Grant', 'email' => 'kitchen@aurelia.test', 'title' => 'Outdoor Kitchen Partner', 'scope' => 'Outdoor kitchen counters and appliances'],
                 ],
                 'projects' => [
                     ['name' => 'Silverleaf Retreat', 'city' => 'Scottsdale', 'state' => 'AZ', 'type' => 'Pool, Spa & Cabana', 'phase' => 'Water Feature Walls', 'progress' => 58, 'health' => 'needs_client_decision', 'contract' => 412000, 'paid' => 223000, 'approvals' => 3, 'messages' => 6, 'offset' => -74],
@@ -626,6 +709,9 @@ class DatabaseSeeder extends Seeder
                 'subs' => [
                     ['name' => 'Lena Morris', 'email' => 'millwork@northline.test', 'title' => 'Millwork Subcontractor', 'scope' => 'Cabinetry and custom millwork'],
                     ['name' => 'Troy Becker', 'email' => 'electrical@northline.test', 'title' => 'Electrical Subcontractor', 'scope' => 'Electrical rough-in and lighting'],
+                    ['name' => 'Graham Ellis', 'email' => 'framing@northline.test', 'title' => 'Framing Subcontractor', 'scope' => 'Framing, sheathing, and field layout'],
+                    ['name' => 'Iris Coleman', 'email' => 'hvac@northline.test', 'title' => 'HVAC Subcontractor', 'scope' => 'Mechanical rough-in and equipment trim'],
+                    ['name' => 'Dante Hughes', 'email' => 'painting@northline.test', 'title' => 'Painting Subcontractor', 'scope' => 'Interior paint and finish touchups'],
                 ],
                 'projects' => [
                     ['name' => 'Briar Lane Estate', 'city' => 'Austin', 'state' => 'TX', 'type' => 'Custom Home', 'phase' => 'Framing Walkthrough', 'progress' => 47, 'health' => 'on_track', 'contract' => 1860000, 'paid' => 714000, 'approvals' => 2, 'messages' => 7, 'offset' => -95],
@@ -653,6 +739,9 @@ class DatabaseSeeder extends Seeder
                 'subs' => [
                     ['name' => 'Ana Silva', 'email' => 'hardscape@verdant.test', 'title' => 'Hardscape Partner', 'scope' => 'Pavers and retaining walls'],
                     ['name' => 'Micah Chen', 'email' => 'irrigation@verdant.test', 'title' => 'Irrigation Partner', 'scope' => 'Irrigation and drainage'],
+                    ['name' => 'Theo Bennett', 'email' => 'masonry@verdant.test', 'title' => 'Masonry Partner', 'scope' => 'Stone walls, planters, and masonry details'],
+                    ['name' => 'Lucia Reyes', 'email' => 'lighting@verdant.test', 'title' => 'Lighting Partner', 'scope' => 'Low-voltage landscape lighting'],
+                    ['name' => 'Owen Park', 'email' => 'planting@verdant.test', 'title' => 'Planting Partner', 'scope' => 'Planting, soil prep, and finish mulch'],
                 ],
                 'projects' => [
                     ['name' => 'Sonoma Garden Rooms', 'city' => 'Sonoma', 'state' => 'CA', 'type' => 'Landscape Renovation', 'phase' => 'Planting Layout', 'progress' => 64, 'health' => 'on_track', 'contract' => 188500, 'paid' => 110000, 'approvals' => 1, 'messages' => 5, 'offset' => -49],
@@ -689,6 +778,7 @@ class DatabaseSeeder extends Seeder
                 'portal_tone' => 'premium, clear, client-first',
             ],
         ]);
+        $subcontractorTypes = $this->seedSubcontractorTypes($company);
 
         $owner = $this->createDemoUser($tenant['owner']['name'], $tenant['owner']['email'], $password);
         $company->users()->attach($owner->id, [
@@ -708,15 +798,17 @@ class DatabaseSeeder extends Seeder
             return $user;
         })->values();
 
-        $subs = collect($tenant['subs'])->map(function (array $sub) use ($company, $password): array {
+        $subs = collect($tenant['subs'])->map(function (array $sub) use ($company, $password, $subcontractorTypes): array {
             $user = $this->createDemoUser($sub['name'], $sub['email'], $password);
+            $type = $this->subcontractorTypeFor($subcontractorTypes, $sub['title'].' '.$sub['scope']);
             $company->users()->attach($user->id, [
                 'role' => Roles::SUBCONTRACTOR,
                 'title' => $sub['title'],
+                'subcontractor_type_id' => $type->id,
                 'joined_at' => now()->subDays(random_int(18, 120)),
             ]);
 
-            return ['user' => $user, 'scope' => $sub['scope']];
+            return ['user' => $user, 'scope' => $sub['scope'], 'type' => $type];
         })->values();
 
         $timelineTemplate = TimelineTemplate::query()->create([
@@ -775,6 +867,7 @@ class DatabaseSeeder extends Seeder
                 client: $client,
                 subcontractor: $sub['user'],
                 subcontractorScope: $sub['scope'],
+                subcontractorType: $sub['type'],
                 timelineTemplate: $timelineTemplate,
                 categories: $categories,
                 approvalTemplate: $approvalTemplate,
@@ -793,6 +886,7 @@ class DatabaseSeeder extends Seeder
                 'invited_by_id' => $owner->id,
                 'email' => $email,
                 'role' => $role,
+                'subcontractor_type_id' => $role === Roles::SUBCONTRACTOR ? $subcontractorTypes->first()->id : null,
                 'token' => Str::random(40),
                 'status' => 'pending',
                 'expires_at' => now()->addDays(10),
@@ -806,6 +900,7 @@ class DatabaseSeeder extends Seeder
         User $client,
         User $subcontractor,
         string $subcontractorScope,
+        SubcontractorType $subcontractorType,
         TimelineTemplate $timelineTemplate,
         Collection $categories,
         ApprovalTemplate $approvalTemplate,
@@ -871,6 +966,8 @@ class DatabaseSeeder extends Seeder
                 'company_id' => $company->id,
                 'project_id' => $project->id,
                 'timeline_template_id' => $timelineTemplate->id,
+                'assigned_subcontractor_id' => $subVisible ? $subcontractor->id : null,
+                'subcontractor_type_id' => $subVisible ? $subcontractorType->id : null,
                 'title' => $title,
                 'phase' => $phase,
                 'description' => $title === 'Client Decision Review'
@@ -1051,6 +1148,109 @@ class DatabaseSeeder extends Seeder
             'ai_update_writer' => false,
             'custom_domain' => $premium,
         ];
+    }
+
+    private function seedSubcontractorTypes(Company $company): Collection
+    {
+        return collect([
+            'Tile & Stone',
+            'Plumbing',
+            'Decking',
+            'Electrical',
+            'Pool Construction',
+            'Landscaping',
+            'Hardscape',
+            'Irrigation',
+            'Outdoor Kitchen',
+            'Automation',
+            'Concrete',
+            'Excavation',
+            'Masonry',
+            'Framing',
+            'Millwork',
+            'HVAC',
+            'Painting',
+            'Roofing',
+        ])->mapWithKeys(fn (string $name, int $index): array => [
+            Str::slug($name) => SubcontractorType::query()->create([
+                'company_id' => $company->id,
+                'name' => $name,
+                'slug' => Str::slug($name),
+                'sort_order' => $index + 1,
+                'is_active' => true,
+            ]),
+        ]);
+    }
+
+    private function subcontractorTypeFor(Collection $types, string $label): SubcontractorType
+    {
+        $normalized = Str::lower($label);
+
+        return match (true) {
+            str_contains($normalized, 'tile'), str_contains($normalized, 'stone') => $types->get('tile-stone'),
+            str_contains($normalized, 'plumb') => $types->get('plumbing'),
+            str_contains($normalized, 'deck') => $types->get('decking'),
+            str_contains($normalized, 'outdoor kitchen'), str_contains($normalized, 'appliance'), str_contains($normalized, 'counter') => $types->get('outdoor-kitchen'),
+            str_contains($normalized, 'automation'), str_contains($normalized, 'control'), str_contains($normalized, 'smart') => $types->get('automation'),
+            str_contains($normalized, 'concrete'), str_contains($normalized, 'foundation'), str_contains($normalized, 'pour') => $types->get('concrete'),
+            str_contains($normalized, 'excavat'), str_contains($normalized, 'shell'), str_contains($normalized, 'gunite') => $types->get('excavation'),
+            str_contains($normalized, 'masonry'), str_contains($normalized, 'retaining wall'), str_contains($normalized, 'planter') => $types->get('masonry'),
+            str_contains($normalized, 'framing'), str_contains($normalized, 'sheathing') => $types->get('framing'),
+            str_contains($normalized, 'millwork'), str_contains($normalized, 'cabinet') => $types->get('millwork'),
+            str_contains($normalized, 'hvac'), str_contains($normalized, 'mechanical') => $types->get('hvac'),
+            str_contains($normalized, 'paint') => $types->get('painting'),
+            str_contains($normalized, 'roof') => $types->get('roofing'),
+            str_contains($normalized, 'electric'), str_contains($normalized, 'lighting') => $types->get('electrical'),
+            str_contains($normalized, 'landscape'), str_contains($normalized, 'planting') => $types->get('landscaping'),
+            str_contains($normalized, 'hardscape'), str_contains($normalized, 'paver') => $types->get('hardscape'),
+            str_contains($normalized, 'irrigation'), str_contains($normalized, 'drainage') => $types->get('irrigation'),
+            default => $types->get('pool-construction'),
+        };
+    }
+
+    /**
+     * @param  Collection<string, array{user: User, title: string, scope: string, type: SubcontractorType}>  $subcontractors
+     * @return array{user: User, title: string, scope: string, type: SubcontractorType}|null
+     */
+    private function omniSubcontractorForTask(Collection $subcontractors, string $label): ?array
+    {
+        $normalized = Str::lower($label);
+
+        $typeSlug = match (true) {
+            str_contains($normalized, 'plumb') => 'plumbing',
+            str_contains($normalized, 'deck') => 'decking',
+            str_contains($normalized, 'electric'), str_contains($normalized, 'lighting') => 'electrical',
+            str_contains($normalized, 'landscape'), str_contains($normalized, 'planting') => 'landscaping',
+            str_contains($normalized, 'hardscape'), str_contains($normalized, 'paver') => 'hardscape',
+            str_contains($normalized, 'irrigation'), str_contains($normalized, 'drainage') => 'irrigation',
+            str_contains($normalized, 'kitchen'), str_contains($normalized, 'appliance'), str_contains($normalized, 'counter') => 'outdoor-kitchen',
+            str_contains($normalized, 'automation'), str_contains($normalized, 'control'), str_contains($normalized, 'orientation') => 'automation',
+            str_contains($normalized, 'excavat'), str_contains($normalized, 'gunite'), str_contains($normalized, 'shell'), str_contains($normalized, 'startup'), str_contains($normalized, 'balance'), str_contains($normalized, 'water fill') => 'pool-construction',
+            default => 'tile-stone',
+        };
+
+        return $subcontractors->get($typeSlug) ?? $subcontractors->get('tile-stone');
+    }
+
+    /**
+     * @param  array{user: User, title: string, scope: string, type: SubcontractorType}  $assignment
+     */
+    private function attachProjectSubcontractor(Project $project, array $assignment): void
+    {
+        $alreadyAssigned = $project->users()
+            ->whereKey($assignment['user']->id)
+            ->wherePivot('role', Roles::SUBCONTRACTOR)
+            ->exists();
+
+        if ($alreadyAssigned) {
+            return;
+        }
+
+        $project->users()->attach($assignment['user']->id, [
+            'role' => Roles::SUBCONTRACTOR,
+            'assigned_scope' => $assignment['scope'],
+            'permissions' => json_encode(['timeline', 'approved_selections', 'visible_documents']),
+        ]);
     }
 
     /**

@@ -6,6 +6,7 @@ namespace Tests\Feature\ProjectVista;
 
 use App\Models\Company;
 use App\Models\Invitation;
+use App\Models\SubcontractorType;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -44,5 +45,35 @@ final class CompanyInvitationTest extends TestCase
                 'role' => 'client',
             ])
             ->assertForbidden();
+    }
+
+    public function test_subcontractor_invitation_requires_and_stores_type(): void
+    {
+        $this->seed();
+
+        $admin = User::query()->where('email', 'admin@omnipools.test')->firstOrFail();
+        $company = Company::query()->where('slug', 'omni-pool-builders')->firstOrFail();
+        $type = SubcontractorType::query()->where('company_id', $company->id)->firstOrFail();
+
+        $this->actingAs($admin)
+            ->post(route('companies.invitations.store', $company), [
+                'email' => 'trade-without-type@example.com',
+                'role' => 'subcontractor',
+            ])
+            ->assertSessionHasErrors('subcontractor_type_id');
+
+        $this->actingAs($admin)
+            ->post(route('companies.invitations.store', $company), [
+                'email' => 'tile-invite@example.com',
+                'role' => 'subcontractor',
+                'subcontractor_type_id' => $type->id,
+            ])
+            ->assertRedirect();
+
+        $this->assertDatabaseHas('invitations', [
+            'email' => 'tile-invite@example.com',
+            'role' => 'subcontractor',
+            'subcontractor_type_id' => $type->id,
+        ]);
     }
 }

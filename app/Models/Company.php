@@ -43,8 +43,13 @@ final class Company extends Model
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class)
-            ->withPivot(['role', 'title', 'invited_at', 'joined_at'])
+            ->withPivot(['role', 'title', 'subcontractor_type_id', 'invited_at', 'joined_at'])
             ->withTimestamps();
+    }
+
+    public function subcontractorTypes(): HasMany
+    {
+        return $this->hasMany(SubcontractorType::class)->orderBy('sort_order');
     }
 
     public function projects(): HasMany

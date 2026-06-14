@@ -15,9 +15,12 @@ use App\Models\TimelineTask;
 use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 final class ProjectVistaData
 {
+    public function __construct(private readonly TimelineScheduler $timelineScheduler) {}
+
     public function dashboard(User $user): array
     {
         $projects = Project::query()
@@ -246,6 +249,7 @@ final class ProjectVistaData
         $company->load([
             'users',
             'projects.manager',
+            'subcontractorTypes',
             'invitations' => fn ($query) => $query->latest(),
         ]);
 
@@ -263,9 +267,17 @@ final class ProjectVistaData
                 'id' => $invitation->id,
                 'email' => $invitation->email,
                 'role' => $invitation->role,
+                'subcontractor_type' => $company->subcontractorTypes->firstWhere('id', $invitation->subcontractor_type_id)?->name,
                 'status' => $invitation->status,
                 'expires_at' => $invitation->expires_at?->toFormattedDateString(),
             ])->values(),
+            'subcontractor_types' => $company->subcontractorTypes
+                ->where('is_active', true)
+                ->map(fn ($type) => [
+                    'id' => $type->id,
+                    'name' => $type->name,
+                ])
+                ->values(),
         ];
     }
 
@@ -275,7 +287,9 @@ final class ProjectVistaData
             'company',
             'manager',
             'users',
-            'timelineTasks',
+            'timelineTasks.project',
+            'timelineTasks.assignedSubcontractor',
+            'timelineTasks.subcontractorType',
             'selections.category',
             'approvals.selection',
             'paymentMilestones',
@@ -340,20 +354,8 @@ final class ProjectVistaData
             ],
             'timeline' => $project->timelineTasks
                 ->filter(fn (TimelineTask $task) => $internal || ($client && $task->client_visible) || ($subcontractor && $task->subcontractor_visible))
-                ->map(fn (TimelineTask $task) => [
-                    'id' => $task->id,
-                    'title' => $task->title,
-                    'phase' => $task->phase,
-                    'description' => $task->description,
-                    'sort_order' => $task->sort_order,
-                    'status' => $task->status,
-                    'starts_on' => $task->starts_on?->toFormattedDateString(),
-                    'due_on' => $task->due_on?->toFormattedDateString(),
-                    'completed_on' => $task->completed_on?->toFormattedDateString(),
-                    'client_visible' => $task->client_visible,
-                    'subcontractor_visible' => $task->subcontractor_visible,
-                    'requires_acknowledgement' => $task->requires_acknowledgement,
-                ])->values(),
+                ->map(fn (TimelineTask $task) => $this->timelineScheduler->taskRow($task))
+                ->values(),
             'selections' => $project->selections
                 ->filter(fn (Selection $selection) => ! $subcontractor || $selection->status === 'approved')
                 ->map(fn (Selection $selection) => [
@@ -441,6 +443,90 @@ final class ProjectVistaData
             'available_subcontractors' => $internal
                 ? $this->availableSubcontractors($project)
                 : [],
+        ];
+    }
+
+    public function timeline(Project $project, User $user): array
+    {
+        $role = $this->timelineScheduler->roleFor($project, $user);
+        $tasks = $this->timelineScheduler->timelineTasks($project, $user);
+        $canEdit = in_array($role, ['super_admin', Roles::COMPANY_ADMIN, Roles::COMPANY_MANAGER], true);
+        $editableProjectIds = $canEdit
+            ? $this->timelineScheduler->editableProjectIds($project, $user)
+            : collect([$project->id]);
+
+        $projects = Project::query()
+            ->whereIn('id', $editableProjectIds)
+            ->orderBy('name')
+            ->get();
+
+        $subcontractorTypes = $project->company
+            ->subcontractorTypes()
+            ->where('is_active', true)
+            ->get();
+
+        $subcontractors = $project->company
+            ->users()
+            ->wherePivot('role', Roles::SUBCONTRACTOR)
+            ->orderBy('name')
+            ->get();
+
+        $conflicts = $canEdit
+            ? $tasks
+                ->flatMap(fn (TimelineTask $task) => $task->project
+                    ? $this->timelineScheduler->conflictsFor($task->project, [
+                        'starts_on' => $task->starts_on?->toDateString(),
+                        'due_on' => $task->due_on?->toDateString(),
+                        'assigned_subcontractor_id' => $task->assigned_subcontractor_id,
+                    ], $task)
+                    : [])
+                ->unique(fn (array $conflict) => implode('|', [
+                    $conflict['type'],
+                    $conflict['project_name'],
+                    $conflict['conflicting_project_name'],
+                    $conflict['task_title'],
+                    $conflict['date_range'],
+                ]))
+                ->values()
+            : collect();
+
+        return [
+            'role' => $role,
+            'can_edit' => $canEdit,
+            'scope_label' => $canEdit ? 'All Open Tasks' : $project->name,
+            'metrics' => [
+                'open_tasks' => $tasks->where('status', '!=', 'completed')->count(),
+                'conflicts' => $conflicts->count(),
+                'due_this_week' => $tasks
+                    ->filter(fn (TimelineTask $task) => $task->due_on !== null
+                        && $task->due_on->betweenIncluded(now()->startOfWeek(), now()->endOfWeek()))
+                    ->count(),
+                'sub_types' => $subcontractorTypes->count(),
+            ],
+            'filters' => [
+                'projects' => $projects->map(fn (Project $availableProject) => [
+                    'id' => $availableProject->id,
+                    'name' => $availableProject->name,
+                    'slug' => $availableProject->slug,
+                ])->values(),
+                'subcontractor_types' => $subcontractorTypes->map(fn ($type) => [
+                    'id' => $type->id,
+                    'name' => $type->name,
+                ])->values(),
+                'statuses' => collect(TimelineScheduler::STATUSES)->map(fn (string $status) => [
+                    'value' => $status,
+                    'label' => Str::headline($status),
+                ])->values(),
+            ],
+            'tasks' => $tasks->map(fn (TimelineTask $task) => $this->timelineScheduler->taskRow($task))->values(),
+            'subcontractors' => $subcontractors->map(fn (User $subcontractor) => [
+                'id' => $subcontractor->id,
+                'name' => $subcontractor->name,
+                'email' => $subcontractor->email,
+                'title' => $subcontractor->pivot->title,
+                'subcontractor_type_id' => $subcontractor->pivot->subcontractor_type_id,
+            ])->values(),
+            'conflicts' => $conflicts,
         ];
     }
 

@@ -43,6 +43,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::patch('/projects/{project:slug}/subcontractors', [ProjectController::class, 'updateSubcontractors'])->name('projects.subcontractors.update');
     Route::get('/projects/{project:slug}/timeline', [ProjectController::class, 'timeline'])->name('projects.timeline');
     Route::patch('/projects/{project:slug}/timeline/reorder', [ProjectController::class, 'reorderTimeline'])->name('projects.timeline.reorder');
+    Route::post('/projects/{project:slug}/timeline/tasks', [ProjectController::class, 'storeTimelineTask'])->name('projects.timeline.tasks.store');
+    Route::patch('/projects/{project:slug}/timeline/tasks/{task}', [ProjectController::class, 'updateTimelineTask'])->name('projects.timeline.tasks.update');
     Route::get('/projects/{project:slug}/selections', [ProjectController::class, 'selections'])->name('projects.selections');
     Route::get('/projects/{project:slug}/approvals', [ProjectController::class, 'approvals'])->name('projects.approvals');
     Route::get('/projects/{project:slug}/payments', [ProjectController::class, 'payments'])->name('projects.payments');

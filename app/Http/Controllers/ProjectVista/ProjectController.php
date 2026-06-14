@@ -11,8 +11,10 @@ use App\Http\Requests\ProjectVista\RespondSelectionRequest;
 use App\Http\Requests\ProjectVista\StoreMessageRequest;
 use App\Http\Requests\ProjectVista\StoreProjectDocumentRequest;
 use App\Http\Requests\ProjectVista\StoreProjectMediaRequest;
+use App\Http\Requests\ProjectVista\StoreTimelineTaskRequest;
 use App\Http\Requests\ProjectVista\UpdateProjectRequest;
 use App\Http\Requests\ProjectVista\UpdateProjectSubcontractorsRequest;
+use App\Http\Requests\ProjectVista\UpdateTimelineTaskRequest;
 use App\Models\Approval;
 use App\Models\MediaAsset;
 use App\Models\Message;
@@ -25,6 +27,7 @@ use App\Models\TimelineTask;
 use App\Models\User;
 use App\Support\ProjectVista\ProjectVistaData;
 use App\Support\ProjectVista\Roles;
+use App\Support\ProjectVista\TimelineScheduler;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -99,6 +102,7 @@ final class ProjectController extends Controller
 
         return Inertia::render('ProjectVista/Timeline', [
             'project' => $data->project($project, auth()->user()),
+            'timeline' => $data->timeline($project, auth()->user()),
         ]);
     }
 
@@ -337,6 +341,84 @@ final class ProjectController extends Controller
         return back()->with('success', 'Timeline order saved.');
     }
 
+    public function storeTimelineTask(
+        StoreTimelineTaskRequest $request,
+        Project $project,
+        TimelineScheduler $scheduler,
+    ): RedirectResponse {
+        Gate::authorize('update', $project);
+
+        $targetProject = Project::query()
+            ->where('company_id', $project->company_id)
+            ->findOrFail($request->integer('project_id'));
+
+        abort_unless($scheduler->editableProjectIds($project, $request->user())->contains($targetProject->id), 403);
+
+        $data = $this->timelineTaskData($request->validated(), $targetProject);
+        $conflicts = $scheduler->conflictsFor($targetProject, $data);
+
+        if ($conflicts !== [] && ! $request->boolean('acknowledge_conflicts')) {
+            return back()
+                ->withErrors(['conflicts' => 'Schedule conflicts detected. Review before saving.'])
+                ->with('timeline_conflicts', $conflicts);
+        }
+
+        $task = DB::transaction(function () use ($data, $targetProject): TimelineTask {
+            $nextSortOrder = (int) TimelineTask::query()
+                ->where('project_id', $targetProject->id)
+                ->max('sort_order') + 1;
+
+            $task = TimelineTask::query()->create([
+                ...$data,
+                'company_id' => $targetProject->company_id,
+                'project_id' => $targetProject->id,
+                'sort_order' => $nextSortOrder,
+            ]);
+
+            $this->ensureSubcontractorProjectAssignment($targetProject, $data['assigned_subcontractor_id'] ?? null);
+
+            return $task;
+        });
+
+        return back()
+            ->with('success', $conflicts === [] ? 'Timeline task added.' : 'Timeline task added with conflict review.')
+            ->with('timeline_conflicts', $conflicts)
+            ->with('selected_timeline_task_id', $task->id);
+    }
+
+    public function updateTimelineTask(
+        UpdateTimelineTaskRequest $request,
+        Project $project,
+        TimelineTask $task,
+        TimelineScheduler $scheduler,
+    ): RedirectResponse {
+        Gate::authorize('update', $task);
+
+        abort_unless($task->company_id === $project->company_id, 404);
+        abort_unless($scheduler->editableProjectIds($project, $request->user())->contains($task->project_id), 403);
+
+        $taskProject = $task->project()->firstOrFail();
+        $data = $this->timelineTaskData($request->validated(), $taskProject);
+        $conflicts = $scheduler->conflictsFor($taskProject, $data, $task);
+
+        if ($conflicts !== [] && ! $request->boolean('acknowledge_conflicts')) {
+            return back()
+                ->withErrors(['conflicts' => 'Schedule conflicts detected. Review before saving.'])
+                ->with('timeline_conflicts', $conflicts)
+                ->with('selected_timeline_task_id', $task->id);
+        }
+
+        DB::transaction(function () use ($task, $taskProject, $data): void {
+            $task->update($data);
+            $this->ensureSubcontractorProjectAssignment($taskProject, $data['assigned_subcontractor_id'] ?? null);
+        });
+
+        return back()
+            ->with('success', $conflicts === [] ? 'Timeline task saved.' : 'Timeline task saved with conflict review.')
+            ->with('timeline_conflicts', $conflicts)
+            ->with('selected_timeline_task_id', $task->id);
+    }
+
     public function respondSelection(RespondSelectionRequest $request, Selection $selection): RedirectResponse
     {
         Gate::authorize('respond', $selection);
@@ -400,5 +482,70 @@ final class ProjectController extends Controller
         $thread->update(['last_message_at' => now()]);
 
         return back()->with('success', 'Message sent.');
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     * @return array<string, mixed>
+     */
+    private function timelineTaskData(array $validated, Project $project): array
+    {
+        $status = (string) $validated['status'];
+        $assignedSubcontractorId = $validated['assigned_subcontractor_id'] ?? null;
+        $subcontractorTypeId = $validated['subcontractor_type_id'] ?? null;
+
+        if ($assignedSubcontractorId !== null && $subcontractorTypeId === null) {
+            $subcontractorTypeId = DB::table('company_user')
+                ->where('company_id', $project->company_id)
+                ->where('user_id', $assignedSubcontractorId)
+                ->where('role', Roles::SUBCONTRACTOR)
+                ->value('subcontractor_type_id');
+        }
+
+        return [
+            'title' => $validated['title'],
+            'phase' => $validated['phase'],
+            'description' => $validated['description'] ?? null,
+            'status' => $status,
+            'starts_on' => $validated['starts_on'] ?? null,
+            'due_on' => $validated['due_on'] ?? null,
+            'completed_on' => $status === 'completed' ? now() : null,
+            'assigned_subcontractor_id' => $assignedSubcontractorId,
+            'subcontractor_type_id' => $subcontractorTypeId,
+            'client_visible' => (bool) ($validated['client_visible'] ?? true),
+            'subcontractor_visible' => (bool) ($validated['subcontractor_visible'] ?? ($assignedSubcontractorId !== null)),
+            'requires_acknowledgement' => (bool) ($validated['requires_acknowledgement'] ?? false),
+        ];
+    }
+
+    private function ensureSubcontractorProjectAssignment(Project $project, int|string|null $subcontractorId): void
+    {
+        if ($subcontractorId === null || $subcontractorId === '') {
+            return;
+        }
+
+        $membership = DB::table('company_user')
+            ->where('company_id', $project->company_id)
+            ->where('user_id', $subcontractorId)
+            ->where('role', Roles::SUBCONTRACTOR)
+            ->first();
+
+        if ($membership === null) {
+            return;
+        }
+
+        DB::table('project_user')->updateOrInsert(
+            [
+                'project_id' => $project->id,
+                'user_id' => (int) $subcontractorId,
+                'role' => Roles::SUBCONTRACTOR,
+            ],
+            [
+                'assigned_scope' => $membership->title ?: 'Assigned Trade Partner',
+                'permissions' => json_encode(['timeline', 'approved_selections', 'visible_documents']),
+                'updated_at' => now(),
+                'created_at' => now(),
+            ],
+        );
     }
 }

@@ -34,6 +34,7 @@ final class CompanyAdminController extends Controller
             'invited_by_id' => $request->user()->id,
             'email' => $request->string('email')->toString(),
             'role' => $request->string('role')->toString(),
+            'subcontractor_type_id' => $request->integer('subcontractor_type_id') ?: null,
             'token' => Str::random(40),
             'status' => 'pending',
             'expires_at' => now()->addDays(7),
