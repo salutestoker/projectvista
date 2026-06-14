@@ -234,6 +234,13 @@ export interface DocumentPayload {
     updated_at: string;
 }
 
+export interface MediaPayload {
+    id: number;
+    url: string;
+    alt_text?: string | null;
+    uploaded_at: string;
+}
+
 export interface ThreadPayload {
     id: number;
     subject: string;
@@ -252,6 +259,8 @@ export interface ProjectPayload {
     id: number;
     name: string;
     slug: string;
+    project_code: string;
+    created_at: string;
     company: CompanyPayload;
     manager?: {
         id: number;
@@ -264,6 +273,10 @@ export interface ProjectPayload {
         email: string;
     } | null;
     address: string;
+    address_line: string;
+    city: string;
+    state: string;
+    postal_code?: string | null;
     project_type: string;
     status: string;
     phase: string;
@@ -271,7 +284,9 @@ export interface ProjectPayload {
     health_status: string;
     contract_amount?: string | null;
     starts_on?: string | null;
+    starts_on_input?: string | null;
     estimated_completion_on?: string | null;
+    estimated_completion_on_input?: string | null;
     hero_image_url?: string | null;
     client_summary?: string | null;
     latest_update?: string | null;
@@ -279,22 +294,35 @@ export interface ProjectPayload {
     role: ProjectVistaRole;
     permissions: {
         can_edit_project: boolean;
+        can_update_project: boolean;
         can_manage_standards: boolean;
         can_message: boolean;
         can_view_payments: boolean;
         can_upload_documents: boolean;
+        can_upload_media: boolean;
+        can_manage_subcontractors: boolean;
     };
     timeline: TimelineTaskPayload[];
     selections: SelectionPayload[];
     approvals: ApprovalPayload[];
     payments: PaymentPayload[];
     documents: DocumentPayload[];
+    media: MediaPayload[];
     threads: ThreadPayload[];
     team: {
         id: number;
         name: string;
         email: string;
         role: string;
+        assigned_scope?: string | null;
+    }[];
+    available_subcontractors: {
+        id: number;
+        name: string;
+        email: string;
+        title?: string | null;
+        phone?: string | null;
+        selected: boolean;
         assigned_scope?: string | null;
     }[];
 }

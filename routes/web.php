@@ -37,6 +37,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::get('/projects', [ProjectController::class, 'index'])->name('projects.index');
     Route::get('/projects/{project:slug}', [ProjectController::class, 'show'])->name('projects.show');
+    Route::patch('/projects/{project:slug}', [ProjectController::class, 'update'])->name('projects.update');
+    Route::post('/projects/{project:slug}/media', [ProjectController::class, 'storeMedia'])->name('projects.media.store');
+    Route::get('/projects/{project:slug}/media/{mediaAsset}', [ProjectController::class, 'showMedia'])->name('projects.media.show');
+    Route::patch('/projects/{project:slug}/subcontractors', [ProjectController::class, 'updateSubcontractors'])->name('projects.subcontractors.update');
     Route::get('/projects/{project:slug}/timeline', [ProjectController::class, 'timeline'])->name('projects.timeline');
     Route::patch('/projects/{project:slug}/timeline/reorder', [ProjectController::class, 'reorderTimeline'])->name('projects.timeline.reorder');
     Route::get('/projects/{project:slug}/selections', [ProjectController::class, 'selections'])->name('projects.selections');

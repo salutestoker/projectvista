@@ -280,6 +280,8 @@ final class ProjectVistaData
             'approvals.selection',
             'paymentMilestones',
             'documents.uploader',
+            'mediaAssets',
+            'company.users',
             'messageThreads.messages.author',
         ]);
 
@@ -293,6 +295,8 @@ final class ProjectVistaData
             'id' => $project->id,
             'name' => $project->name,
             'slug' => $project->slug,
+            'project_code' => 'PV-'.str_pad((string) (1000 + $project->id), 4, '0', STR_PAD_LEFT),
+            'created_at' => $project->created_at->toFormattedDateString(),
             'company' => $this->company($project->company),
             'manager' => $project->manager ? [
                 'id' => $project->manager->id,
@@ -305,6 +309,10 @@ final class ProjectVistaData
                 'email' => $clientUser->email,
             ] : null,
             'address' => "{$project->address_line}, {$project->city}, {$project->state}",
+            'address_line' => $project->address_line,
+            'city' => $project->city,
+            'state' => $project->state,
+            'postal_code' => $project->postal_code,
             'project_type' => $project->project_type,
             'status' => $project->status,
             'phase' => $project->phase,
@@ -312,7 +320,9 @@ final class ProjectVistaData
             'health_status' => $project->health_status,
             'contract_amount' => $project->contract_amount,
             'starts_on' => $project->starts_on?->toFormattedDateString(),
+            'starts_on_input' => $project->starts_on?->toDateString(),
             'estimated_completion_on' => $project->estimated_completion_on?->toFormattedDateString(),
+            'estimated_completion_on_input' => $project->estimated_completion_on?->toDateString(),
             'hero_image_url' => $project->hero_image_path ? asset('storage/'.$project->hero_image_path) : null,
             'client_summary' => $project->client_summary,
             'latest_update' => $project->latest_update,
@@ -320,10 +330,13 @@ final class ProjectVistaData
             'role' => $role,
             'permissions' => [
                 'can_edit_project' => $internal,
+                'can_update_project' => $internal,
                 'can_manage_standards' => in_array($role, ['super_admin', Roles::COMPANY_ADMIN], true),
                 'can_message' => ! $subcontractor,
                 'can_view_payments' => ! $subcontractor,
                 'can_upload_documents' => $this->canUploadDocuments($user, $project, $role),
+                'can_upload_media' => $internal,
+                'can_manage_subcontractors' => $internal,
             ],
             'timeline' => $project->timelineTasks
                 ->filter(fn (TimelineTask $task) => $internal || ($client && $task->client_visible) || ($subcontractor && $task->subcontractor_visible))
@@ -395,6 +408,16 @@ final class ProjectVistaData
                     'uploaded_by' => $document->uploader?->name,
                     'updated_at' => $document->updated_at->toFormattedDateString(),
                 ])->values(),
+            'media' => $project->mediaAssets
+                ->where('collection', 'project')
+                ->where('kind', 'image')
+                ->sortByDesc('created_at')
+                ->map(fn (MediaAsset $asset) => [
+                    'id' => $asset->id,
+                    'url' => route('projects.media.show', [$project, $asset]),
+                    'alt_text' => $asset->alt_text,
+                    'uploaded_at' => $asset->created_at->toFormattedDateString(),
+                ])->values(),
             'threads' => $subcontractor ? [] : $project->messageThreads->map(fn ($thread) => [
                 'id' => $thread->id,
                 'subject' => $thread->subject,
@@ -415,7 +438,37 @@ final class ProjectVistaData
                 'role' => $projectUser->pivot->role,
                 'assigned_scope' => $projectUser->pivot->assigned_scope,
             ])->values(),
+            'available_subcontractors' => $internal
+                ? $this->availableSubcontractors($project)
+                : [],
         ];
+    }
+
+    private function availableSubcontractors(Project $project): Collection
+    {
+        $assignedSubcontractors = $project->users
+            ->filter(fn (User $projectUser) => $projectUser->pivot->role === Roles::SUBCONTRACTOR)
+            ->keyBy('id');
+
+        return $project->company->users
+            ->filter(fn (User $companyUser) => $companyUser->pivot->role === Roles::SUBCONTRACTOR)
+            ->sortBy('name')
+            ->map(function (User $companyUser) use ($assignedSubcontractors): array {
+                $assignment = $assignedSubcontractors->get($companyUser->id);
+
+                return [
+                    'id' => $companyUser->id,
+                    'name' => $companyUser->name,
+                    'email' => $companyUser->email,
+                    'title' => $companyUser->pivot->title,
+                    'phone' => null,
+                    'selected' => $assignment !== null,
+                    'assigned_scope' => $assignment?->pivot?->assigned_scope
+                        ?: $companyUser->pivot->title
+                        ?: 'Assigned Trade Partner',
+                ];
+            })
+            ->values();
     }
 
     private function companiesFor(User $user): array

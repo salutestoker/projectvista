@@ -111,6 +111,11 @@ final class Project extends Model
         return $this->hasMany(ProjectDocument::class);
     }
 
+    public function mediaAssets(): HasMany
+    {
+        return $this->hasMany(MediaAsset::class);
+    }
+
     public function messageThreads(): HasMany
     {
         return $this->hasMany(MessageThread::class);

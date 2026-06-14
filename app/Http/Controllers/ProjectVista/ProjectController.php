@@ -10,7 +10,11 @@ use App\Http\Requests\ProjectVista\RespondApprovalRequest;
 use App\Http\Requests\ProjectVista\RespondSelectionRequest;
 use App\Http\Requests\ProjectVista\StoreMessageRequest;
 use App\Http\Requests\ProjectVista\StoreProjectDocumentRequest;
+use App\Http\Requests\ProjectVista\StoreProjectMediaRequest;
+use App\Http\Requests\ProjectVista\UpdateProjectRequest;
+use App\Http\Requests\ProjectVista\UpdateProjectSubcontractorsRequest;
 use App\Models\Approval;
+use App\Models\MediaAsset;
 use App\Models\Message;
 use App\Models\MessageThread;
 use App\Models\PaymentMilestone;
@@ -18,6 +22,7 @@ use App\Models\Project;
 use App\Models\ProjectDocument;
 use App\Models\Selection;
 use App\Models\TimelineTask;
+use App\Models\User;
 use App\Support\ProjectVista\ProjectVistaData;
 use App\Support\ProjectVista\Roles;
 use Illuminate\Http\RedirectResponse;
@@ -52,6 +57,40 @@ final class ProjectController extends Controller
         return Inertia::render('ProjectVista/ProjectDetail', [
             'project' => $data->project($project, auth()->user()),
         ]);
+    }
+
+    public function update(UpdateProjectRequest $request, Project $project): RedirectResponse
+    {
+        Gate::authorize('update', $project);
+
+        $data = $request->validated();
+
+        DB::transaction(function () use ($project, $data): void {
+            $project->update([
+                'address_line' => $data['address_line'],
+                'city' => $data['city'],
+                'state' => $data['state'],
+                'postal_code' => $data['postal_code'] ?? null,
+                'contract_amount' => $data['contract_amount'] ?? null,
+                'starts_on' => $data['starts_on'] ?? null,
+                'estimated_completion_on' => $data['estimated_completion_on'] ?? null,
+                'project_type' => $data['project_type'],
+                'status' => $data['status'],
+                'phase' => $data['phase'],
+            ]);
+
+            $customerName = trim((string) ($data['customer_name'] ?? ''));
+
+            if ($customerName !== '') {
+                $client = $project->users()
+                    ->wherePivot('role', Roles::CLIENT)
+                    ->first();
+
+                $client?->update(['name' => $customerName]);
+            }
+        });
+
+        return back()->with('success', 'Project details saved.');
     }
 
     public function timeline(Project $project, ProjectVistaData $data): Response
@@ -131,6 +170,110 @@ final class ProjectController extends Controller
         ]);
 
         return back()->with('success', 'Document uploaded.');
+    }
+
+    public function storeMedia(StoreProjectMediaRequest $request, Project $project): RedirectResponse
+    {
+        Gate::authorize('update', $project);
+
+        $file = $request->file('photo');
+        $path = $file->store('project-media/'.$project->id, 'public');
+
+        if ($path === false) {
+            return back()->with('error', 'Photo upload failed.');
+        }
+
+        MediaAsset::query()->create([
+            'company_id' => $project->company_id,
+            'project_id' => $project->id,
+            'uploaded_by_id' => $request->user()->id,
+            'collection' => 'project',
+            'kind' => 'image',
+            'disk' => 'public',
+            'path' => $path,
+            'alt_text' => $request->string('alt_text')->trim()->toString()
+                ?: pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME),
+        ]);
+
+        return back()->with('success', 'Project photo uploaded.');
+    }
+
+    public function showMedia(Project $project, MediaAsset $mediaAsset): StreamedResponse
+    {
+        Gate::authorize('view', $project);
+        abort_unless($mediaAsset->project_id === $project->id, 404);
+        Gate::authorize('view', $mediaAsset);
+
+        $disk = Storage::disk($mediaAsset->disk);
+        abort_unless($disk->exists($mediaAsset->path), 404);
+
+        $extension = pathinfo($mediaAsset->path, PATHINFO_EXTENSION);
+        $baseName = Str::slug($mediaAsset->alt_text ?? 'project-photo') ?: 'project-photo';
+        $filename = $extension === '' ? $baseName : $baseName.'.'.$extension;
+
+        return $disk->response($mediaAsset->path, $filename, [
+            'Content-Type' => $disk->mimeType($mediaAsset->path) ?: 'application/octet-stream',
+            'Cache-Control' => 'private, no-store',
+        ]);
+    }
+
+    public function updateSubcontractors(UpdateProjectSubcontractorsRequest $request, Project $project): RedirectResponse
+    {
+        Gate::authorize('update', $project);
+
+        $requestedIds = collect($request->validated('subcontractor_ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        $companyMemberships = DB::table('company_user')
+            ->where('company_id', $project->company_id)
+            ->where('role', Roles::SUBCONTRACTOR)
+            ->whereIn('user_id', $requestedIds)
+            ->get()
+            ->keyBy('user_id');
+
+        $companySubcontractors = User::query()
+            ->whereIn('id', $companyMemberships->keys())
+            ->get();
+
+        $syncPayload = $companySubcontractors
+            ->mapWithKeys(function (User $subcontractor) use ($project, $companyMemberships): array {
+                $existing = $project->users()
+                    ->whereKey($subcontractor->id)
+                    ->wherePivot('role', Roles::SUBCONTRACTOR)
+                    ->first();
+                $companyMembership = $companyMemberships->get($subcontractor->id);
+
+                return [
+                    $subcontractor->id => [
+                        'role' => Roles::SUBCONTRACTOR,
+                        'assigned_scope' => $existing?->pivot?->assigned_scope
+                            ?: $companyMembership?->title
+                            ?: 'Assigned Trade Partner',
+                        'permissions' => json_encode(['timeline', 'approved_selections', 'visible_documents']),
+                    ],
+                ];
+            })
+            ->all();
+
+        DB::transaction(function () use ($project, $syncPayload): void {
+            $existingSubcontractorIds = DB::table('project_user')
+                ->where('project_id', $project->id)
+                ->where('role', Roles::SUBCONTRACTOR)
+                ->pluck('user_id')
+                ->all();
+
+            if ($existingSubcontractorIds !== []) {
+                $project->users()->detach($existingSubcontractorIds);
+            }
+
+            if ($syncPayload !== []) {
+                $project->users()->attach($syncPayload);
+            }
+        });
+
+        return back()->with('success', 'Subcontractor assignments saved.');
     }
 
     public function showDocument(Project $project, ProjectDocument $document): StreamedResponse
