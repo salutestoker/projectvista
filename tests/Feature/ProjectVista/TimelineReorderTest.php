@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature\ProjectVista;
 
 use App\Models\Project;
+use App\Models\ScheduleChangeLog;
 use App\Models\SubcontractorType;
 use App\Models\TimelineTask;
 use App\Models\User;
@@ -24,7 +25,10 @@ final class TimelineReorderTest extends TestCase
 
         $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
         $project = Project::query()->where('slug', 'smith-residence')->firstOrFail();
-        $tasks = $project->timelineTasks()->take(2)->get();
+        $tasks = $project->timelineTasks()
+            ->where('is_system', false)
+            ->take(2)
+            ->get();
 
         $this->actingAs($manager)
             ->patch(route('projects.timeline.reorder', $project), [
@@ -37,6 +41,27 @@ final class TimelineReorderTest extends TestCase
 
         $this->assertSame(2, TimelineTask::query()->findOrFail($tasks[0]->id)->sort_order);
         $this->assertSame(1, TimelineTask::query()->findOrFail($tasks[1]->id)->sort_order);
+    }
+
+    public function test_manager_cannot_reorder_locked_contract_signed_task(): void
+    {
+        $this->seed();
+
+        $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
+        $project = Project::query()->where('slug', 'smith-residence')->firstOrFail();
+        $task = $project->timelineTasks()
+            ->where('is_system', true)
+            ->firstOrFail();
+
+        $this->actingAs($manager)
+            ->patch(route('projects.timeline.reorder', $project), [
+                'tasks' => [
+                    ['id' => $task->id, 'sort_order' => 2],
+                ],
+            ])
+            ->assertForbidden();
+
+        $this->assertSame(1, TimelineTask::query()->findOrFail($task->id)->sort_order);
     }
 
     public function test_client_cannot_reorder_project_timeline(): void
@@ -56,7 +81,80 @@ final class TimelineReorderTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_manager_can_delete_timeline_task(): void
+    {
+        $this->seed();
+
+        $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
+        $project = Project::query()->where('slug', 'smith-residence')->firstOrFail();
+        $task = $project->timelineTasks()
+            ->where('is_system', false)
+            ->where('status', '!=', 'complete')
+            ->firstOrFail();
+        ScheduleChangeLog::query()->create([
+            'company_id' => $task->company_id,
+            'project_id' => $task->project_id,
+            'timeline_task_id' => $task->id,
+            'user_id' => $manager->id,
+            'old_status' => $task->status,
+            'new_status' => 'blocked',
+            'change_reason' => 'Regression coverage for task deletion.',
+        ]);
+
+        $this->actingAs($manager)
+            ->delete(route('projects.timeline.tasks.destroy', [$project, $task]))
+            ->assertRedirect();
+
+        $this->assertDatabaseMissing('timeline_tasks', ['id' => $task->id]);
+        $this->assertDatabaseMissing('schedule_change_logs', ['timeline_task_id' => $task->id]);
+    }
+
+    public function test_non_internal_users_cannot_delete_timeline_task(): void
+    {
+        $this->seed();
+
+        $client = User::query()->where('email', 'client@omnipools.test')->firstOrFail();
+        $subcontractor = User::query()->where('email', 'sub@omnipools.test')->firstOrFail();
+        $otherAdmin = User::query()->where('email', 'admin@desertstone.test')->firstOrFail();
+        $project = Project::query()->where('slug', 'smith-residence')->firstOrFail();
+        $task = $project->timelineTasks()
+            ->where('is_system', false)
+            ->where('status', '!=', 'complete')
+            ->firstOrFail();
+
+        $this->actingAs($client)
+            ->delete(route('projects.timeline.tasks.destroy', [$project, $task]))
+            ->assertForbidden();
+        $this->actingAs($subcontractor)
+            ->delete(route('projects.timeline.tasks.destroy', [$project, $task]))
+            ->assertForbidden();
+        $this->actingAs($otherAdmin)
+            ->delete(route('projects.timeline.tasks.destroy', [$project, $task]))
+            ->assertForbidden();
+
+        $this->assertDatabaseHas('timeline_tasks', ['id' => $task->id]);
+    }
+
     public function test_admin_timeline_payload_includes_company_open_tasks_only(): void
+    {
+        $this->seed();
+
+        $admin = User::query()->where('email', 'admin@omnipools.test')->firstOrFail();
+
+        $this->actingAs($admin)
+            ->get(route('timelines.index'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('ProjectVista/Timeline')
+                ->where('timeline.can_edit', true)
+                ->where('timeline.metrics.sub_types', 18)
+                ->where('timeline.tasks', fn ($tasks) => collect($tasks)
+                    ->contains(fn (array $task) => $task['status'] === 'complete')
+                    && collect($tasks)
+                        ->contains(fn (array $task) => $task['project_name'] === 'Johnson Residence')));
+    }
+
+    public function test_internal_project_timeline_route_redirects_to_top_level_timelines(): void
     {
         $this->seed();
 
@@ -65,15 +163,7 @@ final class TimelineReorderTest extends TestCase
 
         $this->actingAs($admin)
             ->get(route('projects.timeline', $project))
-            ->assertOk()
-            ->assertInertia(fn (Assert $page) => $page
-                ->component('ProjectVista/Timeline')
-                ->where('timeline.can_edit', true)
-                ->where('timeline.metrics.sub_types', 18)
-                ->where('timeline.tasks', fn ($tasks) => collect($tasks)
-                    ->every(fn (array $task) => $task['status'] !== 'completed')
-                    && collect($tasks)
-                        ->contains(fn (array $task) => $task['project_name'] === 'Johnson Residence')));
+            ->assertRedirect(route('timelines.index'));
     }
 
     public function test_manager_timeline_payload_is_limited_to_managed_or_assigned_projects(): void
@@ -82,7 +172,6 @@ final class TimelineReorderTest extends TestCase
 
         $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
         $company = $manager->companies()->where('slug', 'omni-pool-builders')->firstOrFail();
-        $contextProject = Project::query()->where('slug', 'smith-residence')->firstOrFail();
         $hiddenProject = Project::query()->create([
             'company_id' => $company->id,
             'manager_id' => null,
@@ -91,15 +180,13 @@ final class TimelineReorderTest extends TestCase
             'address_line' => '1 Hidden Way',
             'city' => 'Scottsdale',
             'state' => 'AZ',
-            'project_type' => 'Pool',
-            'status' => 'active',
-            'phase' => 'Hidden Task',
+            'client_name' => 'Hidden Client',
+            'client_email' => 'hidden-client@example.test',
         ]);
         TimelineTask::query()->create([
             'company_id' => $company->id,
             'project_id' => $hiddenProject->id,
             'title' => 'Hidden Schedule',
-            'phase' => 'Hidden',
             'status' => 'in_progress',
             'sort_order' => 1,
             'starts_on' => now(),
@@ -107,7 +194,7 @@ final class TimelineReorderTest extends TestCase
         ]);
 
         $this->actingAs($manager)
-            ->get(route('projects.timeline', $contextProject))
+            ->get(route('timelines.index'))
             ->assertOk()
             ->assertInertia(fn (Assert $page) => $page
                 ->where('timeline.can_edit', true)
@@ -137,10 +224,10 @@ final class TimelineReorderTest extends TestCase
             ->assertInertia(fn (Assert $page) => $page
                 ->where('timeline.can_edit', false)
                 ->where('timeline.tasks', fn ($tasks) => collect($tasks)
-                    ->every(fn (array $task) => $task['project_id'] === $project->id && $task['subcontractor_visible'] === true)));
+                    ->every(fn (array $task) => $task['project_id'] === $project->id && $task['assigned_subcontractor_id'] === $subcontractor->id)));
     }
 
-    public function test_task_update_requires_conflict_acknowledgement_then_saves(): void
+    public function test_task_update_reschedules_without_conflict_override(): void
     {
         $this->seed();
 
@@ -149,13 +236,18 @@ final class TimelineReorderTest extends TestCase
         $task = TimelineTask::query()
             ->where('project_id', $project->id)
             ->whereNotNull('assigned_subcontractor_id')
-            ->where('status', '!=', 'completed')
+            ->where('status', '!=', 'complete')
             ->firstOrFail();
         $conflictingTask = TimelineTask::query()
             ->where('project_id', '!=', $project->id)
             ->where('assigned_subcontractor_id', $task->assigned_subcontractor_id)
-            ->where('status', '!=', 'completed')
+            ->where('status', '!=', 'complete')
             ->firstOrFail();
+        $task->update([
+            'status' => 'in_progress',
+            'starts_on' => $conflictingTask->starts_on->copy()->subDays(14),
+            'due_on' => $conflictingTask->starts_on->copy()->subDays(12),
+        ]);
         $payload = $this->taskPayload($task, [
             'starts_on' => $conflictingTask->starts_on->toDateString(),
             'due_on' => $conflictingTask->due_on->toDateString(),
@@ -164,10 +256,10 @@ final class TimelineReorderTest extends TestCase
 
         $this->actingAs($admin)
             ->patch(route('projects.timeline.tasks.update', [$project, $task]), $payload)
-            ->assertSessionHasErrors('conflicts')
-            ->assertSessionHas('timeline_conflicts');
+            ->assertRedirect()
+            ->assertSessionHasNoErrors();
 
-        $this->assertNotSame('upcoming', $task->refresh()->status);
+        $this->assertSame('in_progress', $task->refresh()->status);
 
         $this->actingAs($admin)
             ->patch(route('projects.timeline.tasks.update', [$project, $task]), [
@@ -175,10 +267,9 @@ final class TimelineReorderTest extends TestCase
                 'acknowledge_conflicts' => true,
             ])
             ->assertRedirect()
-            ->assertSessionHas('timeline_conflicts');
+            ->assertSessionHasNoErrors();
 
-        $this->assertSame('upcoming', $task->refresh()->status);
-        $this->assertSame($conflictingTask->starts_on->toDateString(), $task->starts_on->toDateString());
+        $this->assertNotSame($conflictingTask->starts_on->toDateString(), $task->refresh()->starts_on->toDateString());
     }
 
     public function test_same_project_overlapping_subcontractors_create_conflict(): void
@@ -187,7 +278,15 @@ final class TimelineReorderTest extends TestCase
 
         $admin = User::query()->where('email', 'admin@omnipools.test')->firstOrFail();
         $project = Project::query()->where('slug', 'smith-residence')->firstOrFail();
-        $type = SubcontractorType::query()->where('company_id', $project->company_id)->firstOrFail();
+        $existingTask = TimelineTask::query()
+            ->where('project_id', $project->id)
+            ->whereNotNull('assigned_subcontractor_id')
+            ->where('status', '!=', 'complete')
+            ->firstOrFail();
+        $type = SubcontractorType::query()
+            ->where('company_id', $project->company_id)
+            ->where('id', '!=', $existingTask->subcontractor_type_id)
+            ->firstOrFail();
         $otherSubcontractor = User::query()->create([
             'name' => 'Conflict Trade',
             'email' => 'conflict-trade@example.test',
@@ -203,16 +302,10 @@ final class TimelineReorderTest extends TestCase
             'created_at' => now(),
             'updated_at' => now(),
         ]);
-        $existingTask = TimelineTask::query()
-            ->where('project_id', $project->id)
-            ->whereNotNull('assigned_subcontractor_id')
-            ->where('status', '!=', 'completed')
-            ->firstOrFail();
         $secondTask = TimelineTask::query()->create([
             'company_id' => $project->company_id,
             'project_id' => $project->id,
             'title' => 'Overlapping Trade',
-            'phase' => 'Construction',
             'status' => 'upcoming',
             'sort_order' => 99,
             'starts_on' => $existingTask->starts_on,
@@ -223,9 +316,8 @@ final class TimelineReorderTest extends TestCase
 
         $this->actingAs($admin)
             ->patch(route('projects.timeline.tasks.update', [$project, $existingTask]), $this->taskPayload($existingTask))
-            ->assertSessionHasErrors('conflicts')
-            ->assertSessionHas('timeline_conflicts', fn (array $conflicts) => collect($conflicts)
-                ->contains(fn (array $conflict) => $conflict['type'] === 'same_day_project_conflict'));
+            ->assertRedirect()
+            ->assertSessionHasNoErrors();
 
         $this->assertDatabaseHas('timeline_tasks', ['id' => $secondTask->id]);
     }
@@ -238,19 +330,19 @@ final class TimelineReorderTest extends TestCase
         $project = Project::query()->where('slug', 'smith-residence')->firstOrFail();
         $subcontractor = User::query()->where('email', 'sub@omnipools.test')->firstOrFail();
         $type = SubcontractorType::query()->where('company_id', $project->company_id)->firstOrFail();
+        $predecessor = $project->timelineTasks()
+            ->orderBy('sequence_order')
+            ->firstOrFail();
 
         $this->actingAs($admin)
             ->post(route('projects.timeline.tasks.store', $project), [
                 'project_id' => $project->id,
+                'predecessor_task_id' => $predecessor->id,
                 'title' => 'New Schedule Item',
-                'phase' => 'Construction',
                 'status' => 'upcoming',
-                'starts_on' => now()->addDays(30)->toDateString(),
-                'due_on' => now()->addDays(32)->toDateString(),
                 'assigned_subcontractor_id' => $subcontractor->id,
                 'subcontractor_type_id' => $type->id,
-                'client_visible' => true,
-                'subcontractor_visible' => true,
+                'internal_only' => false,
             ])
             ->assertRedirect();
 
@@ -272,7 +364,10 @@ final class TimelineReorderTest extends TestCase
 
         $otherAdmin = User::query()->where('email', 'admin@desertstone.test')->firstOrFail();
         $project = Project::query()->where('slug', 'smith-residence')->firstOrFail();
-        $task = $project->timelineTasks()->where('status', '!=', 'completed')->firstOrFail();
+        $task = $project->timelineTasks()
+            ->where('is_system', false)
+            ->where('status', '!=', 'complete')
+            ->firstOrFail();
 
         $this->actingAs($otherAdmin)
             ->patch(route('projects.timeline.tasks.update', [$project, $task]), $this->taskPayload($task))
@@ -287,16 +382,20 @@ final class TimelineReorderTest extends TestCase
     {
         return [
             'title' => $task->title,
-            'phase' => $task->phase,
             'description' => $task->description,
             'status' => $task->status,
             'starts_on' => $task->starts_on?->toDateString(),
             'due_on' => $task->due_on?->toDateString(),
             'assigned_subcontractor_id' => $task->assigned_subcontractor_id,
             'subcontractor_type_id' => $task->subcontractor_type_id,
-            'client_visible' => $task->client_visible,
-            'subcontractor_visible' => $task->subcontractor_visible,
+            'internal_only' => $task->internal_only,
             'requires_acknowledgement' => $task->requires_acknowledgement,
+            'is_job_site_ready' => $task->is_job_site_ready,
+            'are_materials_ready' => $task->are_materials_ready,
+            'is_customer_approval_required' => $task->is_customer_approval_required,
+            'is_customer_approval_received' => $task->is_customer_approval_received,
+            'internal_notes' => $task->internal_notes,
+            'customer_notes' => $task->customer_notes,
             ...$overrides,
         ];
     }

@@ -14,6 +14,7 @@ final class Invitation extends Model
         'project_id',
         'invited_by_id',
         'email',
+        'recipient_name',
         'role',
         'subcontractor_type_id',
         'token',

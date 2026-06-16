@@ -7,6 +7,8 @@ namespace App\Support\ProjectVista;
 use App\Models\Project;
 use App\Models\TimelineTask;
 use App\Models\User;
+use App\Services\Scheduling\ScheduleConflict;
+use App\Services\Scheduling\ScheduleConflictDetector;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -14,9 +16,32 @@ use Illuminate\Support\Facades\DB;
 
 final class TimelineScheduler
 {
-    public const OPEN_STATUSES = ['upcoming', 'in_progress', 'blocked', 'needs_approval'];
+    public const CLOSED_STATUSES = ['complete'];
 
-    public const STATUSES = ['upcoming', 'in_progress', 'blocked', 'needs_approval', 'completed'];
+    public const OPEN_STATUSES = [
+        'not_scheduled',
+        'upcoming',
+        'ready',
+        'in_progress',
+        'blocked',
+        'needs_approval',
+        'delayed',
+        'rescheduled',
+    ];
+
+    public const STATUSES = [
+        'not_scheduled',
+        'upcoming',
+        'ready',
+        'in_progress',
+        'blocked',
+        'needs_approval',
+        'delayed',
+        'rescheduled',
+        'complete',
+    ];
+
+    public function __construct(private readonly ScheduleConflictDetector $conflictDetector) {}
 
     public function editableProjectIds(Project $contextProject, User $user): Collection
     {
@@ -55,19 +80,17 @@ final class TimelineScheduler
 
             return $query
                 ->whereIn('project_id', $projectIds)
-                ->whereIn('status', self::OPEN_STATUSES)
                 ->orderBy('starts_on')
-                ->orderBy('sort_order')
+                ->orderByRaw('COALESCE(sequence_order, sort_order)')
                 ->get();
         }
 
         return $query
             ->where('project_id', $contextProject->id)
-            ->when($role === Roles::CLIENT, fn (Builder $tasks) => $tasks->where('client_visible', true))
+            ->when($role === Roles::CLIENT, fn (Builder $tasks) => $tasks->where('internal_only', false))
             ->when($role === Roles::SUBCONTRACTOR, fn (Builder $tasks) => $tasks
-                ->where('subcontractor_visible', true)
                 ->where('assigned_subcontractor_id', $user->id))
-            ->orderBy('sort_order')
+            ->orderByRaw('COALESCE(sequence_order, sort_order)')
             ->get();
     }
 
@@ -77,69 +100,31 @@ final class TimelineScheduler
      */
     public function conflictsFor(Project $project, array $attributes, ?TimelineTask $task = null): array
     {
-        $startsOn = $attributes['starts_on'] ?? null;
-        $dueOn = $attributes['due_on'] ?? null;
-        $assignedSubcontractorId = $attributes['assigned_subcontractor_id'] ?? null;
+        $candidate = $task;
 
-        if (! $startsOn || ! $dueOn || ! $assignedSubcontractorId) {
-            return [];
+        if ($candidate === null) {
+            $candidate = new TimelineTask([
+                'company_id' => $project->company_id,
+                'project_id' => $project->id,
+                'title' => (string) ($attributes['title'] ?? 'Timeline Task'),
+                'status' => (string) ($attributes['status'] ?? 'upcoming'),
+                'sort_order' => (int) ($attributes['sort_order'] ?? 0),
+                'sequence_order' => $attributes['sequence_order'] ?? null,
+            ]);
+            $candidate->setRelation('project', $project);
         }
 
-        $baseQuery = TimelineTask::query()
-            ->with(['project', 'assignedSubcontractor', 'subcontractorType'])
-            ->where('company_id', $project->company_id)
-            ->where('status', '!=', 'completed')
-            ->whereNotNull('starts_on')
-            ->whereNotNull('due_on')
-            ->when($task !== null, fn (Builder $query) => $query->where('id', '!=', $task->id))
-            ->where(fn (Builder $query) => $query
-                ->whereDate('starts_on', '<=', $dueOn)
-                ->whereDate('due_on', '>=', $startsOn));
-
-        $subcontractorConflicts = (clone $baseQuery)
-            ->where('assigned_subcontractor_id', $assignedSubcontractorId)
-            ->get()
-            ->toBase()
-            ->map(fn (TimelineTask $conflict): array => [
-                'type' => 'subcontractor_double_booked',
-                'label' => 'Subcontractor Double-Booked',
-                'project_name' => $project->name,
-                'conflicting_project_name' => $conflict->project?->name,
-                'task_title' => $conflict->title,
-                'date_range' => $this->shortDateRange($conflict),
-                'subcontractor_name' => $conflict->assignedSubcontractor?->name,
-            ]);
-
-        $sameProjectConflicts = (clone $baseQuery)
-            ->where('project_id', $project->id)
-            ->whereNotNull('assigned_subcontractor_id')
-            ->where('assigned_subcontractor_id', '!=', $assignedSubcontractorId)
-            ->get()
-            ->toBase()
-            ->map(fn (TimelineTask $conflict): array => [
-                'type' => 'same_day_project_conflict',
-                'label' => 'Same-Day Project Conflict',
-                'project_name' => $project->name,
-                'conflicting_project_name' => $conflict->project?->name,
-                'task_title' => $conflict->title,
-                'date_range' => $this->shortDateRange($conflict),
-                'subcontractor_name' => $conflict->assignedSubcontractor?->name,
-            ]);
-
-        return $subcontractorConflicts
-            ->merge($sameProjectConflicts)
-            ->unique(fn (array $conflict) => implode('|', [
-                $conflict['type'],
-                $conflict['conflicting_project_name'],
-                $conflict['task_title'],
-                $conflict['date_range'],
-            ]))
+        return $this->conflictDetector
+            ->detectForProposedChange($candidate, $attributes)
+            ->map(fn (ScheduleConflict $conflict) => $conflict->toArray())
             ->values()
             ->all();
     }
 
-    public function taskRow(TimelineTask $task): array
+    public function taskRow(TimelineTask $task, ?string $role = null): array
     {
+        $client = $role === Roles::CLIENT;
+
         return [
             'id' => $task->id,
             'project_id' => $task->project_id,
@@ -147,22 +132,32 @@ final class TimelineScheduler
             'project_slug' => $task->project?->slug,
             'project_code' => 'PV-'.str_pad((string) (1000 + (int) $task->project_id), 4, '0', STR_PAD_LEFT),
             'title' => $task->title,
-            'phase' => $task->phase,
-            'description' => $task->description,
+            'description' => $client ? ($task->customer_notes ?: $task->description) : $task->description,
             'sort_order' => $task->sort_order,
+            'sequence_order' => $task->sequence_order,
+            'default_duration_working_days' => $task->default_duration_working_days,
+            'is_system' => $task->is_system,
             'status' => $task->status,
+            'status_label' => $client ? $this->customerStatusLabel($task->status) : str($task->status)->headline()->toString(),
             'starts_on' => $task->starts_on?->toFormattedDateString(),
             'starts_on_input' => $task->starts_on?->toDateString(),
             'due_on' => $task->due_on?->toFormattedDateString(),
             'due_on_input' => $task->due_on?->toDateString(),
             'completed_on' => $task->completed_on?->toFormattedDateString(),
-            'client_visible' => $task->client_visible,
-            'subcontractor_visible' => $task->subcontractor_visible,
+            'actual_start_date' => $task->actual_start_date?->toFormattedDateString(),
+            'actual_end_date' => $task->actual_end_date?->toFormattedDateString(),
+            'internal_only' => $task->internal_only,
             'requires_acknowledgement' => $task->requires_acknowledgement,
+            'is_job_site_ready' => $task->is_job_site_ready,
+            'are_materials_ready' => $task->are_materials_ready,
+            'is_customer_approval_required' => $task->is_customer_approval_required,
+            'is_customer_approval_received' => $task->is_customer_approval_received,
+            'internal_notes' => $client ? null : $task->internal_notes,
+            'customer_notes' => $task->customer_notes,
             'assigned_subcontractor_id' => $task->assigned_subcontractor_id,
-            'assigned_subcontractor_name' => $task->assignedSubcontractor?->name,
+            'assigned_subcontractor_name' => $client ? null : $task->assignedSubcontractor?->name,
             'subcontractor_type_id' => $task->subcontractor_type_id,
-            'subcontractor_type_name' => $task->subcontractorType?->name,
+            'subcontractor_type_name' => $client ? null : $task->subcontractorType?->name,
             'progress' => $this->progressFor($task),
             'date_range' => $this->shortDateRange($task),
         ];
@@ -198,10 +193,28 @@ final class TimelineScheduler
     private function progressFor(TimelineTask $task): int
     {
         return match ($task->status) {
-            'completed' => 100,
+            'complete' => 100,
             'in_progress' => 65,
+            'ready' => 45,
             'blocked', 'needs_approval' => 35,
+            'delayed', 'rescheduled' => 25,
+            'not_scheduled' => 5,
             default => 15,
+        };
+    }
+
+    private function customerStatusLabel(string $status): string
+    {
+        return match ($status) {
+            'not_scheduled', 'upcoming' => 'Upcoming',
+            'ready' => 'Ready',
+            'in_progress' => 'In Progress',
+            'complete' => 'Complete',
+            'blocked' => 'Waiting',
+            'needs_approval' => 'Needs Review',
+            'delayed' => 'Adjusted',
+            'rescheduled' => 'Rescheduled',
+            default => str($status)->headline()->toString(),
         };
     }
 }

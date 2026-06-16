@@ -1,5 +1,6 @@
 import { AnimatedProgress } from '@/Components/ProjectVista/AnimatedProgress';
 import { ApprovalDonut } from '@/Components/ProjectVista/ApprovalDonut';
+import { DataTable } from '@/Components/ProjectVista/DataTable';
 import { ProjectVistaLogo } from '@/Components/ProjectVista/ProjectVistaLogo';
 import { ProjectVistaShell } from '@/Components/ProjectVista/ProjectVistaShell';
 import { Alert, AlertDescription, AlertTitle } from '@/Components/ui/alert';
@@ -17,17 +18,39 @@ import {
 import { Input } from '@/Components/ui/input';
 import { Separator } from '@/Components/ui/separator';
 import { Skeleton } from '@/Components/ui/skeleton';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/Components/ui/table';
 import { Textarea } from '@/Components/ui/textarea';
 import { Head } from '@inertiajs/react';
+import { ColumnDef } from '@tanstack/react-table';
 import { Bell, CheckCircle2, Sparkles } from 'lucide-react';
+
+type ExampleProjectRow = {
+    project: string;
+    progress: string;
+    status: string;
+    messages: string;
+};
+
+const exampleProjectRows: ExampleProjectRow[] = [
+    {
+        project: 'Smith Residence',
+        progress: '62%',
+        status: 'In Progress',
+        messages: '5',
+    },
+    {
+        project: 'Williams Residence',
+        progress: '75%',
+        status: 'Needs Approval',
+        messages: '8',
+    },
+];
+
+const exampleProjectColumns: ColumnDef<ExampleProjectRow>[] = [
+    { accessorKey: 'project', header: 'Project' },
+    { accessorKey: 'progress', header: 'Progress' },
+    { accessorKey: 'status', header: 'Status' },
+    { accessorKey: 'messages', header: 'Messages' },
+];
 
 export default function ComponentLibrary() {
     return (
@@ -143,40 +166,11 @@ export default function ComponentLibrary() {
                             <CardTitle>Project Table</CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Project</TableHead>
-                                        <TableHead>Progress</TableHead>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead>Messages</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {[
-                                        [
-                                            'Smith Residence',
-                                            '62%',
-                                            'In Progress',
-                                            '5',
-                                        ],
-                                        [
-                                            'Williams Residence',
-                                            '75%',
-                                            'Needs Approval',
-                                            '8',
-                                        ],
-                                    ].map((row) => (
-                                        <TableRow key={row[0]}>
-                                            {row.map((cell) => (
-                                                <TableCell key={cell}>
-                                                    {cell}
-                                                </TableCell>
-                                            ))}
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                            <DataTable
+                                columns={exampleProjectColumns}
+                                data={exampleProjectRows}
+                                getRowId={(row) => row.project}
+                            />
                         </CardContent>
                     </Card>
 

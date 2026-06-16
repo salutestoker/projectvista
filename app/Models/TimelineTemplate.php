@@ -26,4 +26,9 @@ final class TimelineTemplate extends Model
     {
         return $this->hasMany(TimelineTask::class)->orderBy('sort_order');
     }
+
+    public function taskTemplates(): HasMany
+    {
+        return $this->hasMany(TimelineTaskTemplate::class)->orderBy('sequence_order');
+    }
 }

@@ -15,23 +15,22 @@ import {
 } from '@/Components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { PageProps } from '@/types';
-import { ProjectPayload, ProjectVistaRole } from '@/types/projectvista';
+import {
+    CompanyPayload,
+    ProjectPayload,
+    ProjectVistaRole,
+} from '@/types/projectvista';
+import { useGlobalEffects } from '@/hooks/useGlobalEffects';
 import { Link, usePage } from '@inertiajs/react';
 import {
     Bell,
-    CalendarDays,
-    Check,
-    CreditCard,
-    FileText,
     FolderKanban,
     Home,
     LayoutDashboard,
     LogOut,
     Menu,
-    MessageSquare,
     Settings,
     Shield,
-    Sparkles,
     Timer,
 } from 'lucide-react';
 import { PropsWithChildren, useState } from 'react';
@@ -41,6 +40,7 @@ interface ProjectVistaShellProps extends PropsWithChildren {
     eyebrow?: string;
     role: ProjectVistaRole;
     project?: ProjectPayload | null;
+    company?: CompanyPayload | null;
     navBadges?: Record<string, number>;
     primaryAction?: {
         label: string;
@@ -62,20 +62,58 @@ export function ProjectVistaShell({
     eyebrow,
     role,
     project,
+    company,
     navBadges = {},
     primaryAction,
     children,
 }: ProjectVistaShellProps) {
     const page = usePage<PageProps>();
-    const { auth, flash } = page.props;
+    const { auth } = page.props;
     const url = page.url;
     const [mobileOpen, setMobileOpen] = useState(false);
+    useGlobalEffects();
     const userInitials = auth.user.name
         .split(' ')
         .map((part) => part[0])
         .join('')
         .slice(0, 2)
         .toUpperCase();
+    const internalRole =
+        role === 'super_admin' ||
+        role === 'company_admin' ||
+        role === 'company_manager';
+
+    const companyNavItems =
+        !project &&
+        company &&
+        (role === 'company_admin' || role === 'company_manager')
+            ? [
+                  {
+                      key: 'projects',
+                      label: 'Projects',
+                      href: route('projects.index'),
+                      Icon: FolderKanban,
+                  },
+                  {
+                      key: 'timeline',
+                      label: 'Timeline',
+                      href: route('timelines.index'),
+                      Icon: Timer,
+                  },
+                  // {
+                  //     key: 'reports',
+                  //     label: 'Reports',
+                  //     href: route('dashboard'),
+                  //     Icon: CalendarDays,
+                  // },
+                  {
+                      key: 'settings',
+                      label: 'Company Settings',
+                      href: route('companies.admin', company.slug),
+                      Icon: Settings,
+                  },
+              ]
+            : [];
 
     const navItems = [
         { key: 'home', label: 'Home', href: route('dashboard'), Icon: Home },
@@ -95,6 +133,7 @@ export function ProjectVistaShell({
                   },
               ]
             : []),
+        ...companyNavItems,
         ...(project
             ? [
                   {
@@ -108,70 +147,72 @@ export function ProjectVistaShell({
                   },
                   {
                       key: 'timeline',
-                      label: 'Timeline',
-                      href: route('projects.timeline', project.slug),
+                      label: role === 'client' ? 'Timeline' : 'Timelines',
+                      href: internalRole
+                          ? route('timelines.index')
+                          : route('projects.timeline', project.slug),
                       Icon: Timer,
                   },
-                  ...(role !== 'subcontractor'
-                      ? [
-                            {
-                                key: 'selections',
-                                label: 'Selections',
-                                href: route(
-                                    'projects.selections',
-                                    project.slug,
-                                ),
-                                Icon: Sparkles,
-                            },
-                        ]
-                      : []),
-                  ...(role !== 'subcontractor'
-                      ? [
-                            {
-                                key: 'messaging',
-                                label: 'Messaging',
-                                href: route('projects.messages', project.slug),
-                                Icon: MessageSquare,
-                            },
-                            {
-                                key: 'approvals',
-                                label: 'Approvals',
-                                href: route('projects.approvals', project.slug),
-                                Icon: Check,
-                            },
-                        ]
-                      : [
-                            {
-                                key: 'approvals',
-                                label: 'Approvals',
-                                href: route('projects.timeline', project.slug),
-                                Icon: Check,
-                            },
-                        ]),
-                  ...(project.permissions.can_view_payments
-                      ? [
-                            {
-                                key: 'payments',
-                                label: 'Payments',
-                                href: route('projects.payments', project.slug),
-                                Icon: CreditCard,
-                            },
-                        ]
-                      : []),
-                  {
-                      key: 'documents',
-                      label: 'Documents',
-                      href: route('projects.documents', project.slug),
-                      Icon: FileText,
-                  },
+                  // ...(role !== 'subcontractor'
+                  //     ? [
+                  //           {
+                  //               key: 'selections',
+                  //               label: 'Selections',
+                  //               href: route(
+                  //                   'projects.selections',
+                  //                   project.slug,
+                  //               ),
+                  //               Icon: Sparkles,
+                  //           },
+                  //       ]
+                  //     : []),
+                  // ...(role !== 'subcontractor'
+                  //     ? [
+                  //           {
+                  //               key: 'messaging',
+                  //               label: 'Messaging',
+                  //               href: route('projects.messages', project.slug),
+                  //               Icon: MessageSquare,
+                  //           },
+                  //           {
+                  //               key: 'approvals',
+                  //               label: 'Approvals',
+                  //               href: route('projects.approvals', project.slug),
+                  //               Icon: Check,
+                  //           },
+                  //       ]
+                  //     : [
+                  //           {
+                  //               key: 'approvals',
+                  //               label: 'Approvals',
+                  //               href: route('projects.timeline', project.slug),
+                  //               Icon: Check,
+                  //           },
+                  //       ]),
+                  // ...(project.permissions.can_view_payments
+                  //     ? [
+                  //           {
+                  //               key: 'payments',
+                  //               label: 'Payments',
+                  //               href: route('projects.payments', project.slug),
+                  //               Icon: CreditCard,
+                  //           },
+                  //       ]
+                  //     : []),
+                  // {
+                  //     key: 'documents',
+                  //     label: 'Documents',
+                  //     href: route('projects.documents', project.slug),
+                  //     Icon: FileText,
+                  // },
                   ...(role === 'company_admin' || role === 'company_manager'
                       ? [
-                            {
-                                key: 'reports',
-                                label: 'Reports',
-                                href: route('dashboard'),
-                                Icon: CalendarDays,
-                            },
+                            // {
+                            //     key: 'reports',
+                            //     label: 'Reports',
+                            //     href: route('dashboard'),
+                            //     Icon: CalendarDays,
+                            // },
                             {
                                 key: 'settings',
                                 label: 'Company Settings',
@@ -290,14 +331,16 @@ export function ProjectVistaShell({
 
                         <div className="flex items-center gap-3">
                             <Tooltip>
-                                <TooltipTrigger>
-                                    <Button variant="outline" size="icon">
-                                        <Bell />
-                                        <span className="sr-only">
-                                            Notifications
-                                        </span>
-                                    </Button>
-                                </TooltipTrigger>
+                                <TooltipTrigger
+                                    render={
+                                        <Button variant="outline" size="icon">
+                                            <Bell />
+                                            <span className="sr-only">
+                                                Notifications
+                                            </span>
+                                        </Button>
+                                    }
+                                />
                                 <TooltipContent>Notifications</TooltipContent>
                             </Tooltip>
                             {primaryAction?.href ? (
@@ -323,11 +366,6 @@ export function ProjectVistaShell({
                             </Link>
                         </div>
                     </div>
-                    {(flash.success || flash.error) && (
-                        <div className="border-primary/30 bg-primary/10 text-primary mx-auto mt-4 max-w-[1560px] rounded-lg border px-4 py-3 text-sm">
-                            {flash.success ?? flash.error}
-                        </div>
-                    )}
                 </header>
 
                 <section className="mx-auto max-w-[1560px] px-5 py-8 md:px-8">

@@ -37,6 +37,7 @@ class HandleInertiaRequests extends Middleware
             'flash' => [
                 'success' => fn () => $request->session()->get('success'),
                 'error' => fn () => $request->session()->get('error'),
+                'toast' => fn () => $request->session()->get('toast'),
                 'timeline_conflicts' => fn () => $request->session()->get('timeline_conflicts'),
                 'selected_timeline_task_id' => fn () => $request->session()->get('selected_timeline_task_id'),
             ],

@@ -1,3 +1,6 @@
+import { DeleteIconButton } from '@/Components/ProjectVista/DeleteIconButton';
+import { DataTable } from '@/Components/ProjectVista/DataTable';
+import { ProjectVistaModal } from '@/Components/ProjectVista/ProjectVistaModal';
 import { ProjectVistaShell } from '@/Components/ProjectVista/ProjectVistaShell';
 import { StatusPill } from '@/Components/ProjectVista/StatusPill';
 import { Alert, AlertDescription, AlertTitle } from '@/Components/ui/alert';
@@ -11,6 +14,7 @@ import {
     CardHeader,
     CardTitle,
 } from '@/Components/ui/card';
+import { Checkbox } from '@/Components/ui/checkbox';
 import {
     Field,
     FieldDescription,
@@ -19,7 +23,6 @@ import {
     FieldLabel,
 } from '@/Components/ui/field';
 import { Input } from '@/Components/ui/input';
-import { Progress } from '@/Components/ui/progress';
 import {
     Select,
     SelectContent,
@@ -27,40 +30,26 @@ import {
     SelectItem,
     SelectTrigger,
 } from '@/Components/ui/select';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/Components/ui/table';
+import { Textarea } from '@/Components/ui/textarea';
+import { useConfirm } from '@/Context/ConfirmContext';
+import { cn } from '@/lib/utils';
 import {
     ProjectPayload,
     TimelineConflictPayload,
     TimelineTaskPayload,
     TimelineWorkspacePayload,
 } from '@/types/projectvista';
-import { cn } from '@/lib/utils';
+import { Head, router, useForm, usePage } from '@inertiajs/react';
+import { ColumnDef } from '@tanstack/react-table';
+import { CalendarDays, Plus } from 'lucide-react';
 import {
-    closestCenter,
-    DndContext,
-    DragEndEvent,
-    KeyboardSensor,
-    PointerSensor,
-    useSensor,
-    useSensors,
-} from '@dnd-kit/core';
-import {
-    SortableContext,
-    sortableKeyboardCoordinates,
-    useSortable,
-    verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
-import { Head, useForm, usePage } from '@inertiajs/react';
-import { CalendarDays, GripVertical, Plus } from 'lucide-react';
-import { FormEvent, MouseEvent, ReactNode, useMemo, useState } from 'react';
+    FormEvent,
+    MouseEvent,
+    ReactNode,
+    useCallback,
+    useMemo,
+    useState,
+} from 'react';
 
 interface TimelineProps {
     project: ProjectPayload;
@@ -69,17 +58,21 @@ interface TimelineProps {
 
 type TimelineTaskForm = {
     project_id: string;
+    predecessor_task_id: string;
     title: string;
-    phase: string;
     description: string;
     status: string;
-    starts_on: string;
-    due_on: string;
+    duration_days: string;
     assigned_subcontractor_id: string;
     subcontractor_type_id: string;
-    client_visible: boolean;
-    subcontractor_visible: boolean;
+    internal_only: boolean;
     requires_acknowledgement: boolean;
+    is_job_site_ready: boolean;
+    are_materials_ready: boolean;
+    is_customer_approval_required: boolean;
+    is_customer_approval_received: boolean;
+    internal_notes: string;
+    customer_notes: string;
     acknowledge_conflicts: boolean;
 };
 
@@ -108,53 +101,45 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
         timeline.tasks[0] ??
         null;
 
-    const [tasks, setTasks] = useState(timeline.tasks);
-    const [selectedTask, setSelectedTask] =
-        useState<TimelineTaskPayload | null>(initialSelectedTask);
+    const [selectedTaskId, setSelectedTaskId] = useState<number | null>(
+        initialSelectedTask?.id ?? null,
+    );
     const [localConflicts, setLocalConflicts] =
         useState<TimelineConflictPayload[]>(flashConflicts);
     const [scopeFilter, setScopeFilter] = useState('open');
     const [projectFilter, setProjectFilter] = useState('all');
-    const [typeFilter, setTypeFilter] = useState('all');
     const [statusFilter, setStatusFilter] = useState('all');
+    const [taskModalOpen, setTaskModalOpen] = useState(false);
+    const confirm = useConfirm();
 
+    const selectedTask = useMemo(
+        () =>
+            selectedTaskId === null
+                ? null
+                : (timeline.tasks.find((task) => task.id === selectedTaskId) ??
+                  null),
+        [selectedTaskId, timeline.tasks],
+    );
     const form = useForm<TimelineTaskForm>(
         taskFormDefaults(selectedTask, project, timeline),
     );
 
-    const sensors = useSensors(
-        useSensor(PointerSensor, {
-            activationConstraint: {
-                distance: 8,
-            },
-        }),
-        useSensor(KeyboardSensor, {
-            coordinateGetter: sortableKeyboardCoordinates,
-        }),
-    );
-
     const filteredTasks = useMemo(
         () =>
-            tasks.filter((task) => {
+            timeline.tasks.filter((task) => {
                 const openMatch =
-                    scopeFilter !== 'open' || task.status !== 'completed';
+                    scopeFilter !== 'open' ||
+                    statusFilter !== 'all' ||
+                    task.status !== 'complete';
                 const projectMatch =
                     projectFilter === 'all' ||
                     String(task.project_id) === projectFilter;
-                const typeMatch =
-                    typeFilter === 'all' ||
-                    String(task.subcontractor_type_id ?? '') === typeFilter;
                 const statusMatch =
                     statusFilter === 'all' || task.status === statusFilter;
 
-                return openMatch && projectMatch && typeMatch && statusMatch;
+                return openMatch && projectMatch && statusMatch;
             }),
-        [projectFilter, scopeFilter, statusFilter, tasks, typeFilter],
-    );
-
-    const ids = useMemo(
-        () => filteredTasks.map((task) => task.id),
-        [filteredTasks],
+        [projectFilter, scopeFilter, statusFilter, timeline.tasks],
     );
 
     const visibleConflicts = localConflicts.length
@@ -162,51 +147,34 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
         : timeline.conflicts;
 
     const selectTask = (task: TimelineTaskPayload) => {
-        setSelectedTask(task);
+        setSelectedTaskId(task.id);
         setLocalConflicts([]);
         form.setData(taskFormDefaults(task, project, timeline));
         form.clearErrors();
+        setTaskModalOpen(true);
     };
 
     const startNewTask = () => {
-        setSelectedTask(null);
+        setSelectedTaskId(null);
         setLocalConflicts([]);
         form.setData(taskFormDefaults(null, project, timeline));
         form.clearErrors();
+        setTaskModalOpen(true);
     };
 
-    const handleDragEnd = (event: DragEndEvent) => {
-        const { active, over } = event;
+    const closeTaskModal = () => {
+        setTaskModalOpen(false);
+        setLocalConflicts([]);
+        form.clearErrors();
 
-        if (!over || active.id === over.id) {
+        if (selectedTask) {
+            form.setData(taskFormDefaults(selectedTask, project, timeline));
+
             return;
         }
 
-        const dragged = tasks.find((task) => task.id === active.id);
-        const target = tasks.find((task) => task.id === over.id);
-
-        if (!dragged || !target || !target.starts_on_input) {
-            return;
-        }
-
-        const duration = taskDurationDays(dragged);
-        const nextTask = {
-            ...dragged,
-            starts_on_input: target.starts_on_input,
-            due_on_input: addDays(target.starts_on_input, duration),
-            date_range: formatInputRange(
-                target.starts_on_input,
-                addDays(target.starts_on_input, duration),
-            ),
-        };
-        const nextTasks = tasks.map((task) =>
-            task.id === dragged.id ? nextTask : task,
-        );
-
-        setTasks(nextTasks);
-        setSelectedTask(nextTask);
-        form.setData(taskFormDefaults(nextTask, project, timeline));
-        setLocalConflicts(detectConflicts(nextTask, nextTasks));
+        setSelectedTaskId(initialSelectedTask?.id ?? null);
+        form.setData(taskFormDefaults(initialSelectedTask, project, timeline));
     };
 
     const submitTask = (
@@ -217,6 +185,7 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
 
         form.transform((data) => ({
             ...data,
+            duration_days: Math.max(1, Number(data.duration_days || 1)),
             acknowledge_conflicts: acknowledgeConflicts,
         }));
 
@@ -226,7 +195,13 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
                     project.slug,
                     selectedTask.id,
                 ]),
-                { preserveScroll: true },
+                {
+                    preserveScroll: true,
+                    onSuccess: () => {
+                        setTaskModalOpen(false);
+                        setLocalConflicts([]);
+                    },
+                },
             );
 
             return;
@@ -234,8 +209,123 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
 
         form.post(route('projects.timeline.tasks.store', project.slug), {
             preserveScroll: true,
+            onSuccess: () => {
+                setTaskModalOpen(false);
+                setLocalConflicts([]);
+            },
         });
     };
+
+    const deleteTask = useCallback(async (task: TimelineTaskPayload) => {
+        if (task.is_system) {
+            return;
+        }
+
+        const confirmed = await confirm({
+            title: 'Delete timeline task?',
+            message: (
+                <>
+                    This will remove{' '}
+                    <span className="text-foreground font-semibold">
+                        {task.title}
+                    </span>{' '}
+                    from the timeline.
+                </>
+            ),
+            confirmText: 'Delete Task',
+            danger: true,
+            requireExplicitAction: true,
+        });
+
+        if (!confirmed) {
+            return;
+        }
+
+        router.delete(
+            route('projects.timeline.tasks.destroy', [project.slug, task.id]),
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setLocalConflicts([]);
+
+                    if (selectedTaskId === task.id) {
+                        setSelectedTaskId(null);
+                    }
+                },
+            },
+        );
+    }, [confirm, project.slug, selectedTaskId]);
+
+    const taskColumns = useMemo<ColumnDef<TimelineTaskPayload>[]>(
+        () => [
+            {
+                accessorKey: 'project_name',
+                header: 'Project',
+                cell: ({ row }) => (
+                    <div className="font-semibold">
+                        {row.original.project_name}
+                    </div>
+                ),
+            },
+            {
+                accessorKey: 'title',
+                header: 'Task',
+                cell: ({ row }) => (
+                    <div className="font-semibold">{row.original.title}</div>
+                ),
+            },
+            {
+                accessorKey: 'status',
+                header: 'Status',
+                cell: ({ row }) => (
+                    <StatusPill
+                        status={row.original.status}
+                        label={row.original.status_label}
+                    />
+                ),
+            },
+            {
+                accessorKey: 'assigned_subcontractor_name',
+                header: 'Sub-Contractor',
+                cell: ({ row }) =>
+                    row.original.assigned_subcontractor_name ?? 'Unassigned',
+            },
+            {
+                accessorKey: 'starts_on',
+                header: 'Start Date',
+                cell: ({ row }) => row.original.starts_on ?? 'TBD',
+            },
+            {
+                accessorKey: 'due_on',
+                header: 'End Date',
+                cell: ({ row }) => row.original.due_on ?? 'TBD',
+            },
+            {
+                id: 'duration',
+                header: 'Duration',
+                cell: ({ row }) => durationLabel(row.original),
+            },
+            {
+                id: 'actions',
+                header: () => <span className="sr-only">Actions</span>,
+                size: 48,
+                cell: ({ row }) => (
+                    <div className="text-right">
+                        {row.original.is_system ? null : (
+                            <DeleteIconButton
+                                label={`Delete ${row.original.title}`}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    void deleteTask(row.original);
+                                }}
+                            />
+                        )}
+                    </div>
+                ),
+            },
+        ],
+        [deleteTask],
+    );
 
     return (
         <ProjectVistaShell
@@ -252,162 +342,140 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
                             Timeline
                         </h1>
                         <p className="text-muted-foreground mt-2">
-                            Open timeline tasks across projects. Drag-and-drop
-                            schedule changes trigger conflict detection.
+                            Open timeline tasks across projects. Dates are
+                            calculated from each project schedule.
                         </p>
                     </div>
                     <Button type="button">Save Template</Button>
                 </header>
 
                 <section className="grid gap-4 md:grid-cols-4">
-                    <Metric label="Open Tasks" value={timeline.metrics.open_tasks} detail="Complete tasks hidden" />
-                    <Metric label="Conflicts" value={visibleConflicts.length} detail="After reschedule" destructive />
-                    <Metric label="Due This Week" value={timeline.metrics.due_this_week} detail="Open tasks" />
-                    <Metric label="Sub Types" value={timeline.metrics.sub_types} detail="Trade categories" />
+                    <Metric
+                        label="Open Tasks"
+                        value={timeline.metrics.open_tasks}
+                        detail="Complete tasks hidden"
+                    />
+                    <Metric
+                        label="Conflicts"
+                        value={visibleConflicts.length}
+                        detail="After reschedule"
+                        destructive
+                    />
+                    <Metric
+                        label="Due This Week"
+                        value={timeline.metrics.due_this_week}
+                        detail="Open tasks"
+                    />
+                    <Metric
+                        label="Sub Types"
+                        value={timeline.metrics.sub_types}
+                        detail="Trade categories"
+                    />
                 </section>
 
-                <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_520px]">
-                    <div className="flex flex-col gap-5">
-                        <Card className="pv-card">
-                            <CardContent className="flex flex-wrap items-center gap-3 py-4">
-                                <div className="mr-2 text-xl font-semibold">
-                                    Filters
-                                </div>
-                                <FilterSelect
-                                    value={scopeFilter}
-                                    onChange={setScopeFilter}
-                                    options={[
-                                        { value: 'open', label: 'All Open Tasks' },
-                                        { value: 'all', label: 'All Tasks' },
-                                    ]}
-                                />
-                                <FilterSelect
-                                    value={projectFilter}
-                                    onChange={setProjectFilter}
-                                    options={[
-                                        { value: 'all', label: 'All Projects' },
-                                        ...timeline.filters.projects.map(
-                                            (option) => ({
-                                                value: option.id.toString(),
-                                                label: option.name,
-                                            }),
-                                        ),
-                                    ]}
-                                />
-                                <FilterSelect
-                                    value={typeFilter}
-                                    onChange={setTypeFilter}
-                                    options={[
-                                        { value: 'all', label: 'All Sub Types' },
-                                        ...timeline.filters.subcontractor_types.map(
-                                            (option) => ({
-                                                value: option.id.toString(),
-                                                label: option.name,
-                                            }),
-                                        ),
-                                    ]}
-                                />
-                                <FilterSelect
-                                    value={statusFilter}
-                                    onChange={setStatusFilter}
-                                    options={[
-                                        { value: 'all', label: 'All Statuses' },
-                                        ...timeline.filters.statuses,
-                                    ]}
-                                />
-                                <Button
-                                    type="button"
-                                    onClick={startNewTask}
-                                    className="ml-auto"
-                                >
-                                    <Plus data-icon="inline-start" />
-                                    Add Task
-                                </Button>
-                            </CardContent>
-                        </Card>
+                <section className="flex flex-col gap-5">
+                    <Card className="pv-card">
+                        <CardContent className="flex flex-wrap items-center gap-3 py-4">
+                            <div className="mr-2 text-xl font-semibold">
+                                Filters
+                            </div>
+                            <FilterSelect
+                                value={scopeFilter}
+                                onChange={setScopeFilter}
+                                options={[
+                                    {
+                                        value: 'open',
+                                        label: 'All Open Tasks',
+                                    },
+                                    { value: 'all', label: 'All Tasks' },
+                                ]}
+                            />
+                            <FilterSelect
+                                value={projectFilter}
+                                onChange={setProjectFilter}
+                                options={[
+                                    { value: 'all', label: 'All Projects' },
+                                    ...timeline.filters.projects.map(
+                                        (option) => ({
+                                            value: option.id.toString(),
+                                            label: option.name,
+                                        }),
+                                    ),
+                                ]}
+                            />
+                            <FilterSelect
+                                value={statusFilter}
+                                onChange={setStatusFilter}
+                                options={[
+                                    { value: 'all', label: 'All Statuses' },
+                                    ...timeline.filters.statuses,
+                                ]}
+                            />
+                            <Button
+                                type="button"
+                                onClick={startNewTask}
+                                className="ml-auto"
+                            >
+                                <Plus data-icon="inline-start" />
+                                Add Task
+                            </Button>
+                        </CardContent>
+                    </Card>
 
-                        <Card className="pv-card">
-                            <CardHeader className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                                <div>
-                                    <CardTitle className="text-2xl">
-                                        Open Timeline Tasks
-                                    </CardTitle>
-                                    <CardDescription>
-                                        Completed tasks are hidden by default.
-                                    </CardDescription>
-                                </div>
-                                <div className="text-primary text-sm font-semibold">
-                                    Drag tasks to reschedule
-                                </div>
-                            </CardHeader>
-                            <CardContent>
-                                <DndContext
-                                    sensors={sensors}
-                                    collisionDetection={closestCenter}
-                                    onDragEnd={handleDragEnd}
-                                >
-                                    <SortableContext
-                                        items={ids}
-                                        strategy={verticalListSortingStrategy}
-                                    >
-                                        <Table>
-                                            <TableHeader>
-                                                <TableRow>
-                                                    <TableHead>Project</TableHead>
-                                                    <TableHead>Task</TableHead>
-                                                    <TableHead>Status</TableHead>
-                                                    <TableHead>Sub-Contractor</TableHead>
-                                                    <TableHead>Type</TableHead>
-                                                    <TableHead>Date</TableHead>
-                                                    <TableHead>Progress</TableHead>
-                                                </TableRow>
-                                            </TableHeader>
-                                            <TableBody>
-                                                {filteredTasks.map((task) => (
-                                                    <SortableTaskRow
-                                                        key={task.id}
-                                                        task={task}
-                                                        selected={
-                                                            selectedTask?.id ===
-                                                            task.id
-                                                        }
-                                                        onSelect={() =>
-                                                            selectTask(task)
-                                                        }
-                                                    />
-                                                ))}
-                                            </TableBody>
-                                        </Table>
-                                    </SortableContext>
-                                </DndContext>
-                            </CardContent>
-                            <CardFooter className="text-muted-foreground text-sm">
-                                {selectedTask
-                                    ? `Selected task: ${selectedTask.project_name} · ${selectedTask.title}`
-                                    : 'Open tasks only · completed tasks are hidden unless the filter is changed.'}
-                            </CardFooter>
-                        </Card>
-                    </div>
+                    <Card className="pv-card">
+                        <CardHeader className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                            <div>
+                                <CardTitle className="text-2xl">
+                                    Timeline Tasks
+                                </CardTitle>
+                                <CardDescription>
+                                    All open tasks are selected by default.
+                                </CardDescription>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            <DataTable
+                                columns={taskColumns}
+                                data={filteredTasks}
+                                emptyMessage="No timeline tasks match these filters."
+                                getRowId={(task) => task.id.toString()}
+                                rowClassName={(row) =>
+                                    cn(
+                                        row.original.is_system &&
+                                            'cursor-default',
+                                        selectedTask?.id === row.original.id &&
+                                            'bg-primary/15 outline-primary/40 outline',
+                                    )
+                                }
+                                onRowClick={(task) => {
+                                    if (!task.is_system) {
+                                        selectTask(task);
+                                    }
+                                }}
+                            />
+                        </CardContent>
+                        <CardFooter className="text-muted-foreground text-sm">
+                            {selectedTask
+                                ? `Selected task: ${selectedTask.project_name} · ${selectedTask.title}`
+                                : 'Open tasks only · complete tasks are hidden unless the filter is changed.'}
+                        </CardFooter>
+                    </Card>
+                </section>
 
-                    <TimelineSidePanel
+                <ProjectVistaModal
+                    show={taskModalOpen}
+                    maxWidth="3xl"
+                    onClose={closeTaskModal}
+                >
+                    <TimelineTaskFormPanel
                         timeline={timeline}
                         selectedTask={selectedTask}
                         form={form}
-                        conflicts={visibleConflicts}
+                        conflicts={localConflicts}
                         onSubmit={submitTask}
-                        onCancel={() => {
-                            setSelectedTask(initialSelectedTask);
-                            setLocalConflicts([]);
-                            form.setData(
-                                taskFormDefaults(
-                                    initialSelectedTask,
-                                    project,
-                                    timeline,
-                                ),
-                            );
-                        }}
+                        onCancel={closeTaskModal}
                     />
-                </section>
+                </ProjectVistaModal>
 
                 <ConflictPreviewCard conflicts={visibleConflicts} />
             </div>
@@ -415,54 +483,7 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
     );
 }
 
-function SortableTaskRow({
-    task,
-    selected,
-    onSelect,
-}: {
-    task: TimelineTaskPayload;
-    selected: boolean;
-    onSelect: () => void;
-}) {
-    const { attributes, listeners, setNodeRef, transform, transition } =
-        useSortable({ id: task.id });
-
-    return (
-        <TableRow
-            ref={setNodeRef}
-            style={{ transform: CSS.Transform.toString(transform), transition }}
-            className={cn(
-                'cursor-grab touch-none select-none active:cursor-grabbing',
-                selected && 'bg-primary/15 outline outline-primary/40',
-            )}
-            {...attributes}
-            {...listeners}
-            onClick={onSelect}
-        >
-            <TableCell className="font-semibold">
-                <div className="flex items-center gap-2">
-                    <GripVertical
-                        data-icon="inline-start"
-                        className="text-muted-foreground"
-                    />
-                    <span>{task.project_name}</span>
-                </div>
-            </TableCell>
-            <TableCell className="font-semibold">{task.title}</TableCell>
-            <TableCell>
-                <StatusPill status={task.status} />
-            </TableCell>
-            <TableCell>{task.assigned_subcontractor_name ?? 'Unassigned'}</TableCell>
-            <TableCell>{task.subcontractor_type_name ?? 'Unassigned'}</TableCell>
-            <TableCell>{task.date_range ?? 'TBD'}</TableCell>
-            <TableCell>
-                <Progress value={task.progress ?? 0} className="min-w-24" />
-            </TableCell>
-        </TableRow>
-    );
-}
-
-function TimelineSidePanel({
+function TimelineTaskFormPanel({
     timeline,
     selectedTask,
     form,
@@ -492,32 +513,209 @@ function TimelineSidePanel({
     const selectedSubcontractorLabel =
         form.data.assigned_subcontractor_id === ''
             ? 'Unassigned'
-            : timeline.subcontractors.find(
+            : (timeline.subcontractors.find(
                   (option) =>
                       option.id.toString() ===
                       form.data.assigned_subcontractor_id,
-              )?.name ?? 'Unassigned';
+              )?.name ?? 'Unassigned');
     const selectedSubcontractorTypeLabel =
         form.data.subcontractor_type_id === ''
             ? 'Unassigned'
-            : timeline.filters.subcontractor_types.find(
+            : (timeline.filters.subcontractor_types.find(
                   (option) =>
                       option.id.toString() === form.data.subcontractor_type_id,
-              )?.name ?? 'Unassigned';
+              )?.name ?? 'Unassigned');
+    const projectSubcontractors =
+        timeline.filters.project_subcontractors[form.data.project_id] ?? [];
+    const quickEditSubcontractorLabel =
+        form.data.assigned_subcontractor_id === ''
+            ? 'Unassigned'
+            : (projectSubcontractors.find(
+                  (option) =>
+                      option.id.toString() ===
+                      form.data.assigned_subcontractor_id,
+              )?.name ?? 'Unassigned');
+    const selectedProjectTasks = timeline.tasks
+        .filter((task) => task.project_id?.toString() === form.data.project_id)
+        .sort(
+            (first, second) =>
+                (first.sequence_order ?? first.sort_order) -
+                (second.sequence_order ?? second.sort_order),
+        );
+    const selectedPredecessorLabel =
+        selectedProjectTasks.find(
+            (task) => task.id.toString() === form.data.predecessor_task_id,
+        )?.title ?? 'Select predecessor';
+
+    const quickEditTask = selectedTask;
+
+    if (editingExisting && quickEditTask) {
+        return (
+            <div className="flex max-h-[calc(100vh-3rem)] flex-col">
+                <div className="border-border border-b px-6 py-5">
+                    <h2 className="text-2xl font-semibold">
+                        Quick Edit Task
+                    </h2>
+                    <p className="text-muted-foreground mt-2 text-sm">
+                        {quickEditTask.project_name} · {quickEditTask.title}
+                    </p>
+                </div>
+                <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
+                    {conflicts.length > 0 ? (
+                        <Alert variant="destructive">
+                            <AlertTitle>
+                                {conflicts.length} Conflict
+                                {conflicts.length === 1 ? '' : 's'} Detected
+                            </AlertTitle>
+                            <AlertDescription>
+                                Saving will recalculate the schedule from these
+                                values.
+                            </AlertDescription>
+                        </Alert>
+                    ) : null}
+                    <form
+                        id="timeline-task-form"
+                        onSubmit={(event) => onSubmit(event, false)}
+                        className="flex flex-col gap-5"
+                    >
+                        <FieldGroup>
+                            <Field data-invalid={!!form.errors.status}>
+                                <FieldLabel>Status</FieldLabel>
+                                <Select
+                                    value={form.data.status}
+                                    onValueChange={(value) =>
+                                        form.setData('status', String(value))
+                                    }
+                                >
+                                    <SelectTrigger className="w-full data-[size=default]:h-11">
+                                        <SelectedSelectLabel>
+                                            {selectedStatusLabel}
+                                        </SelectedSelectLabel>
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectGroup>
+                                            {timeline.filters.statuses.map(
+                                                (option) => (
+                                                    <SelectItem
+                                                        key={option.value}
+                                                        value={option.value}
+                                                    >
+                                                        {option.label}
+                                                    </SelectItem>
+                                                ),
+                                            )}
+                                        </SelectGroup>
+                                    </SelectContent>
+                                </Select>
+                                <FieldError>{form.errors.status}</FieldError>
+                            </Field>
+
+                            <TextField
+                                label="Duration (Days)"
+                                type="number"
+                                value={form.data.duration_days}
+                                error={form.errors.duration_days}
+                                onChange={(value) =>
+                                    form.setData('duration_days', value)
+                                }
+                            />
+
+                            <Field
+                                data-invalid={
+                                    !!form.errors.assigned_subcontractor_id
+                                }
+                            >
+                                <FieldLabel>Sub-Contractor</FieldLabel>
+                                <Select
+                                    value={
+                                        form.data.assigned_subcontractor_id ||
+                                        'unassigned'
+                                    }
+                                    onValueChange={(value) => {
+                                        const nextValue =
+                                            String(value) === 'unassigned'
+                                                ? ''
+                                                : String(value);
+                                        const subcontractor =
+                                            projectSubcontractors.find(
+                                                (option) =>
+                                                    option.id.toString() ===
+                                                    nextValue,
+                                            );
+
+                                        form.setData({
+                                            ...form.data,
+                                            assigned_subcontractor_id:
+                                                nextValue,
+                                            subcontractor_type_id:
+                                                subcontractor?.subcontractor_type_id?.toString() ||
+                                                '',
+                                        });
+                                    }}
+                                >
+                                    <SelectTrigger className="w-full data-[size=default]:h-11">
+                                        <SelectedSelectLabel>
+                                            {quickEditSubcontractorLabel}
+                                        </SelectedSelectLabel>
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectGroup>
+                                            <SelectItem value="unassigned">
+                                                Unassigned
+                                            </SelectItem>
+                                            {projectSubcontractors.map(
+                                                (option) => (
+                                                    <SelectItem
+                                                        key={option.id}
+                                                        value={option.id.toString()}
+                                                    >
+                                                        {option.name}
+                                                    </SelectItem>
+                                                ),
+                                            )}
+                                        </SelectGroup>
+                                    </SelectContent>
+                                </Select>
+                                <FieldError>
+                                    {form.errors.assigned_subcontractor_id}
+                                </FieldError>
+                                {projectSubcontractors.length === 0 ? (
+                                    <FieldDescription>
+                                        No subcontractors are assigned to this
+                                        project yet.
+                                    </FieldDescription>
+                                ) : null}
+                            </Field>
+                        </FieldGroup>
+                    </form>
+                </div>
+                <div className="border-border grid gap-3 border-t px-6 py-4 md:grid-cols-2">
+                    <Button type="button" variant="outline" onClick={onCancel}>
+                        Cancel
+                    </Button>
+                    <Button
+                        type="submit"
+                        form="timeline-task-form"
+                        disabled={form.processing}
+                    >
+                        Save Task
+                    </Button>
+                </div>
+            </div>
+        );
+    }
 
     return (
-        <Card className="pv-card">
-            <CardHeader>
-                <CardTitle className="text-2xl">
-                    {editingExisting ? 'Edit Timeline Task' : 'Add Timeline Task'}
-                </CardTitle>
-                <CardDescription>
-                    {editingExisting
-                        ? `${selectedTask.project_name} · ${selectedTask.title}`
-                        : 'Create a new open task for a project.'}
-                </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-6">
+        <div className="flex max-h-[calc(100vh-3rem)] flex-col">
+            <div className="border-border border-b px-6 py-5">
+                <h2 className="text-2xl font-semibold">
+                    Add Timeline Task
+                </h2>
+                <p className="text-muted-foreground mt-2 text-sm">
+                    Create a new open task for a project.
+                </p>
+            </div>
+            <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
                 {conflicts.length > 0 ? (
                     <Alert variant="destructive">
                         <AlertTitle>
@@ -525,11 +723,11 @@ function TimelineSidePanel({
                             {conflicts.length === 1 ? '' : 's'} Detected
                         </AlertTitle>
                         <AlertDescription>
-                            Review before saving schedule changes.
+                            Saving will use the first available dates after the
+                            selected predecessor.
                         </AlertDescription>
                     </Alert>
                 ) : null}
-
                 <form
                     id="timeline-task-form"
                     onSubmit={(event) => onSubmit(event, false)}
@@ -541,9 +739,25 @@ function TimelineSidePanel({
                                 <FieldLabel>Project</FieldLabel>
                                 <Select
                                     value={form.data.project_id}
-                                    onValueChange={(value) =>
-                                        form.setData('project_id', String(value))
-                                    }
+                                    onValueChange={(value) => {
+                                        const nextProjectId = String(value);
+                                        const nextPredecessor =
+                                            timeline.tasks.find(
+                                                (task) =>
+                                                    task.project_id?.toString() ===
+                                                    nextProjectId,
+                                            );
+
+                                        form.setData({
+                                            ...form.data,
+                                            project_id: nextProjectId,
+                                            predecessor_task_id:
+                                                nextPredecessor?.id.toString() ??
+                                                '',
+                                            assigned_subcontractor_id: '',
+                                            subcontractor_type_id: '',
+                                        });
+                                    }}
                                 >
                                     <SelectTrigger className="w-full data-[size=default]:h-11">
                                         <SelectedSelectLabel>
@@ -565,9 +779,51 @@ function TimelineSidePanel({
                                         </SelectGroup>
                                     </SelectContent>
                                 </Select>
-                                <FieldError>{form.errors.project_id}</FieldError>
+                                <FieldError>
+                                    {form.errors.project_id}
+                                </FieldError>
                             </Field>
                         ) : null}
+
+                        <Field
+                            data-invalid={!!form.errors.predecessor_task_id}
+                        >
+                            <FieldLabel>Predecessor Task</FieldLabel>
+                            <Select
+                                value={form.data.predecessor_task_id}
+                                onValueChange={(value) =>
+                                    form.setData(
+                                        'predecessor_task_id',
+                                        String(value),
+                                    )
+                                }
+                            >
+                                <SelectTrigger className="w-full data-[size=default]:h-11">
+                                    <SelectedSelectLabel>
+                                        {selectedPredecessorLabel}
+                                    </SelectedSelectLabel>
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectGroup>
+                                        {selectedProjectTasks.map((task) => (
+                                            <SelectItem
+                                                key={task.id}
+                                                value={task.id.toString()}
+                                            >
+                                                {task.title}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectGroup>
+                                </SelectContent>
+                            </Select>
+                            <FieldError>
+                                {form.errors.predecessor_task_id}
+                            </FieldError>
+                            <FieldDescription>
+                                The new task will start on the first available
+                                date after this task.
+                            </FieldDescription>
+                        </Field>
 
                         <TextField
                             label="Task"
@@ -575,13 +831,6 @@ function TimelineSidePanel({
                             error={form.errors.title}
                             onChange={(value) => form.setData('title', value)}
                         />
-                        <TextField
-                            label="Phase"
-                            value={form.data.phase}
-                            error={form.errors.phase}
-                            onChange={(value) => form.setData('phase', value)}
-                        />
-
                         <Field data-invalid={!!form.errors.status}>
                             <FieldLabel>Task Status</FieldLabel>
                             <Select
@@ -642,8 +891,6 @@ function TimelineSidePanel({
                                         subcontractor_type_id:
                                             subcontractor?.subcontractor_type_id?.toString() ||
                                             form.data.subcontractor_type_id,
-                                        subcontractor_visible:
-                                            nextValue !== '',
                                     });
                                 }}
                             >
@@ -657,14 +904,16 @@ function TimelineSidePanel({
                                         <SelectItem value="unassigned">
                                             Unassigned
                                         </SelectItem>
-                                        {timeline.subcontractors.map((option) => (
-                                            <SelectItem
-                                                key={option.id}
-                                                value={option.id.toString()}
-                                            >
-                                                {option.name}
-                                            </SelectItem>
-                                        ))}
+                                        {timeline.subcontractors.map(
+                                            (option) => (
+                                                <SelectItem
+                                                    key={option.id}
+                                                    value={option.id.toString()}
+                                                >
+                                                    {option.name}
+                                                </SelectItem>
+                                            ),
+                                        )}
                                     </SelectGroup>
                                 </SelectContent>
                             </Select>
@@ -673,7 +922,9 @@ function TimelineSidePanel({
                             </FieldError>
                         </Field>
 
-                        <Field data-invalid={!!form.errors.subcontractor_type_id}>
+                        <Field
+                            data-invalid={!!form.errors.subcontractor_type_id}
+                        >
                             <FieldLabel>Sub-Contractor Type</FieldLabel>
                             <Select
                                 value={
@@ -717,56 +968,90 @@ function TimelineSidePanel({
                             </FieldError>
                         </Field>
 
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <TextField
-                                label="Start Date"
-                                type="date"
-                                value={form.data.starts_on}
-                                error={form.errors.starts_on}
-                                onChange={(value) =>
-                                    form.setData('starts_on', value)
-                                }
-                            />
-                            <TextField
-                                label="Due Date"
-                                type="date"
-                                value={form.data.due_on}
-                                error={form.errors.due_on}
-                                onChange={(value) =>
-                                    form.setData('due_on', value)
-                                }
-                            />
-                        </div>
                         <FieldDescription>
-                            Saving re-checks conflicts before updating the
-                            timeline and notifying assigned subcontractors.
+                            Start and end dates are calculated automatically
+                            from the predecessor and duration.
                         </FieldDescription>
+                        <FieldGroup>
+                            <FieldLabel>Readiness</FieldLabel>
+                            <BooleanField
+                                label="Internal Only"
+                                checked={form.data.internal_only}
+                                onChange={(checked) =>
+                                    form.setData('internal_only', checked)
+                                }
+                            />
+                            <BooleanField
+                                label="Job site ready"
+                                checked={form.data.is_job_site_ready}
+                                onChange={(checked) =>
+                                    form.setData('is_job_site_ready', checked)
+                                }
+                            />
+                            <BooleanField
+                                label="Materials ready"
+                                checked={form.data.are_materials_ready}
+                                onChange={(checked) =>
+                                    form.setData('are_materials_ready', checked)
+                                }
+                            />
+                            <BooleanField
+                                label="Customer approval required"
+                                checked={
+                                    form.data.is_customer_approval_required
+                                }
+                                onChange={(checked) =>
+                                    form.setData(
+                                        'is_customer_approval_required',
+                                        checked,
+                                    )
+                                }
+                            />
+                            <BooleanField
+                                label="Customer approval received"
+                                checked={
+                                    form.data.is_customer_approval_received
+                                }
+                                onChange={(checked) =>
+                                    form.setData(
+                                        'is_customer_approval_received',
+                                        checked,
+                                    )
+                                }
+                            />
+                        </FieldGroup>
+                        <TextAreaField
+                            label="Internal Notes"
+                            value={form.data.internal_notes}
+                            error={form.errors.internal_notes}
+                            onChange={(value) =>
+                                form.setData('internal_notes', value)
+                            }
+                        />
+                        <TextAreaField
+                            label="Customer Notes"
+                            value={form.data.customer_notes}
+                            error={form.errors.customer_notes}
+                            onChange={(value) =>
+                                form.setData('customer_notes', value)
+                            }
+                        />
                     </FieldGroup>
                 </form>
-            </CardContent>
-            <CardFooter className="grid gap-3 md:grid-cols-2">
+            </div>
+            <div className="border-border grid gap-3 border-t px-6 py-4 md:grid-cols-2">
                 <Button type="button" variant="outline" onClick={onCancel}>
                     Cancel
                 </Button>
-                {conflicts.length > 0 ? (
-                    <Button
-                        type="button"
-                        disabled={form.processing}
-                        onClick={(event) => onSubmit(event, true)}
-                    >
-                        Save With Reschedule Review
-                    </Button>
-                ) : (
-                    <Button
-                        type="submit"
-                        form="timeline-task-form"
-                        disabled={form.processing}
-                    >
-                        {editingExisting ? 'Save Task' : 'Add Task'}
-                    </Button>
-                )}
-            </CardFooter>
-        </Card>
+                <Button
+                    type="submit"
+                    form="timeline-task-form"
+                    disabled={form.processing}
+                >
+                    {editingExisting ? 'Save Task' : 'Add Task'}
+                </Button>
+            </div>
+        </div>
     );
 }
 
@@ -780,8 +1065,8 @@ function ConflictPreviewCard({
             <CardHeader>
                 <CardTitle className="text-2xl">Conflict Preview</CardTitle>
                 <CardDescription>
-                    Schedule conflicts appear after drag-and-drop rescheduling
-                    or failed conflict checks.
+                    Schedule conflicts appear when the current calculated
+                    schedule needs attention.
                 </CardDescription>
             </CardHeader>
             <CardContent>
@@ -808,20 +1093,48 @@ function ConflictList({ conflicts }: { conflicts: TimelineConflictPayload[] }) {
             {conflicts.map((conflict, index) => (
                 <div
                     key={`${conflict.type}-${conflict.task_title}-${index}`}
-                    className="border-destructive/40 rounded-lg border bg-destructive/10 p-4"
+                    className="border-destructive/40 bg-destructive/10 rounded-lg border p-4"
                 >
-                    <Badge variant="destructive">{conflict.label}</Badge>
+                    <div className="flex flex-wrap gap-2">
+                        <Badge variant="destructive">{conflict.label}</Badge>
+                        {conflict.severity ? (
+                            <Badge variant="secondary">
+                                {humanizeSelectValue(conflict.severity)}
+                            </Badge>
+                        ) : null}
+                    </div>
                     <div className="mt-4 font-semibold">
-                        Project conflict: {conflict.project_name}
+                        Project conflict:{' '}
+                        {conflict.project_conflict ??
+                            conflict.conflicting_project_name ??
+                            conflict.project_name}
                     </div>
                     <p className="text-muted-foreground mt-2 text-sm">
-                        Also: {conflict.conflicting_project_name} ·{' '}
-                        {conflict.date_range}
+                        Task: {conflict.task_title} · {conflict.date_range}
                     </p>
+                    {conflict.conflict_date ? (
+                        <p className="text-muted-foreground mt-1 text-sm">
+                            Date: {conflict.conflict_date}
+                        </p>
+                    ) : null}
                     <p className="text-muted-foreground mt-1 text-sm">
                         Subcontractor:{' '}
                         {conflict.subcontractor_name ?? 'Unassigned'}
                     </p>
+                    {conflict.subcontractor_type_name ? (
+                        <p className="text-muted-foreground mt-1 text-sm">
+                            Type: {conflict.subcontractor_type_name}
+                        </p>
+                    ) : null}
+                    {conflict.reason ? (
+                        <p className="mt-3 text-sm">{conflict.reason}</p>
+                    ) : null}
+                    {conflict.suggested_resolution ? (
+                        <p className="text-muted-foreground mt-2 text-sm">
+                            Suggested resolution:{' '}
+                            {conflict.suggested_resolution}
+                        </p>
+                    ) : null}
                 </div>
             ))}
         </div>
@@ -864,29 +1177,46 @@ function ReadOnlyTimeline({ project, timeline }: TimelineProps) {
                             >
                                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                     <div>
-                                        <div className="text-primary text-xs font-semibold tracking-[0.2em] uppercase">
-                                            {task.phase}
-                                        </div>
-                                        <h2 className="mt-1 text-xl font-semibold">
+                                        <h2 className="text-xl font-semibold">
                                             {task.title}
                                         </h2>
                                         <p className="text-muted-foreground mt-2 text-sm">
                                             {task.description}
                                         </p>
                                     </div>
-                                    <StatusPill status={task.status} />
+                                    <StatusPill
+                                        status={task.status}
+                                        label={task.status_label}
+                                    />
                                 </div>
                                 <div className="text-muted-foreground mt-4 flex flex-wrap gap-3 text-sm">
                                     <span className="flex items-center gap-2">
                                         <CalendarDays data-icon="inline-start" />
                                         {task.date_range ?? 'TBD'}
                                     </span>
-                                    {task.assigned_subcontractor_name ? (
+                                    {timeline.role === 'subcontractor' &&
+                                    task.assigned_subcontractor_name ? (
                                         <span>
                                             {task.assigned_subcontractor_name}
                                         </span>
                                     ) : null}
                                 </div>
+                                {timeline.role === 'subcontractor' ? (
+                                    <div className="text-muted-foreground mt-3 flex flex-wrap gap-2 text-xs">
+                                        <Badge variant="secondary">
+                                            Site{' '}
+                                            {task.is_job_site_ready
+                                                ? 'ready'
+                                                : 'not ready'}
+                                        </Badge>
+                                        <Badge variant="secondary">
+                                            Materials{' '}
+                                            {task.are_materials_ready
+                                                ? 'ready'
+                                                : 'pending'}
+                                        </Badge>
+                                    </div>
+                                ) : null}
                             </div>
                         ))}
                     </CardContent>
@@ -1007,92 +1337,105 @@ function TextField({
     );
 }
 
+function TextAreaField({
+    label,
+    value,
+    error,
+    onChange,
+}: {
+    label: string;
+    value: string;
+    error?: string;
+    onChange: (value: string) => void;
+}) {
+    return (
+        <Field data-invalid={!!error}>
+            <FieldLabel>{label}</FieldLabel>
+            <Textarea
+                value={value}
+                aria-invalid={!!error}
+                onChange={(event) => onChange(event.target.value)}
+            />
+            <FieldError>{error}</FieldError>
+        </Field>
+    );
+}
+
+function BooleanField({
+    label,
+    checked,
+    onChange,
+}: {
+    label: string;
+    checked: boolean;
+    onChange: (checked: boolean) => void;
+}) {
+    return (
+        <Field orientation="horizontal">
+            <Checkbox
+                checked={checked}
+                onCheckedChange={(nextChecked) =>
+                    onChange(nextChecked === true)
+                }
+            />
+            <FieldLabel>{label}</FieldLabel>
+        </Field>
+    );
+}
+
 function taskFormDefaults(
     task: TimelineTaskPayload | null,
     project: ProjectPayload,
     timeline: TimelineWorkspacePayload,
 ): TimelineTaskForm {
+    const projectId =
+        task?.project_id?.toString() ??
+        timeline.filters.projects[0]?.id?.toString() ??
+        project.id.toString();
+    const projectTasks = timeline.tasks
+        .filter((timelineTask) => timelineTask.project_id?.toString() === projectId)
+        .sort(
+            (first, second) =>
+                (first.sequence_order ?? first.sort_order) -
+                (second.sequence_order ?? second.sort_order),
+        );
+
     return {
-        project_id:
-            task?.project_id?.toString() ??
-            timeline.filters.projects[0]?.id?.toString() ??
-            project.id.toString(),
+        project_id: projectId,
+        predecessor_task_id: projectTasks[0]?.id.toString() ?? '',
         title: task?.title ?? '',
-        phase: task?.phase ?? project.phase,
         description: task?.description ?? '',
         status: task?.status ?? 'upcoming',
-        starts_on: task?.starts_on_input ?? '',
-        due_on: task?.due_on_input ?? '',
+        duration_days: task ? taskDurationInputDays(task).toString() : '1',
         assigned_subcontractor_id:
             task?.assigned_subcontractor_id?.toString() ?? '',
         subcontractor_type_id: task?.subcontractor_type_id?.toString() ?? '',
-        client_visible: task?.client_visible ?? true,
-        subcontractor_visible: task?.subcontractor_visible ?? false,
+        internal_only: task?.internal_only ?? false,
         requires_acknowledgement: task?.requires_acknowledgement ?? false,
+        is_job_site_ready: task?.is_job_site_ready ?? true,
+        are_materials_ready: task?.are_materials_ready ?? true,
+        is_customer_approval_required:
+            task?.is_customer_approval_required ?? false,
+        is_customer_approval_received:
+            task?.is_customer_approval_received ?? false,
+        internal_notes: task?.internal_notes ?? '',
+        customer_notes: task?.customer_notes ?? '',
         acknowledge_conflicts: false,
     };
 }
 
-function detectConflicts(
-    candidate: TimelineTaskPayload,
-    tasks: TimelineTaskPayload[],
-): TimelineConflictPayload[] {
-    if (
-        !candidate.starts_on_input ||
-        !candidate.due_on_input ||
-        !candidate.assigned_subcontractor_id
-    ) {
-        return [];
-    }
+function durationLabel(task: TimelineTaskPayload) {
+    const days = taskDurationInputDays(task);
 
-    const candidateStart = candidate.starts_on_input;
-    const candidateDue = candidate.due_on_input;
-
-    return tasks
-        .filter(
-            (task) =>
-                task.id !== candidate.id &&
-                task.status !== 'completed' &&
-                task.starts_on_input &&
-                task.due_on_input &&
-                overlaps(
-                    candidateStart,
-                    candidateDue,
-                    task.starts_on_input,
-                    task.due_on_input,
-                ) &&
-                (task.assigned_subcontractor_id ===
-                    candidate.assigned_subcontractor_id ||
-                    (task.project_id === candidate.project_id &&
-                        task.assigned_subcontractor_id &&
-                        task.assigned_subcontractor_id !==
-                            candidate.assigned_subcontractor_id)),
-        )
-        .map((task) => {
-            const doubleBooked =
-                task.assigned_subcontractor_id ===
-                candidate.assigned_subcontractor_id;
-
-            return {
-                type: doubleBooked
-                    ? 'subcontractor_double_booked'
-                    : 'same_day_project_conflict',
-                label: doubleBooked
-                    ? 'Subcontractor Double-Booked'
-                    : 'Same-Day Project Conflict',
-                project_name: candidate.project_name ?? 'Project',
-                conflicting_project_name: task.project_name,
-                task_title: task.title,
-                date_range: task.date_range ?? 'TBD',
-                subcontractor_name:
-                    task.assigned_subcontractor_name ??
-                    candidate.assigned_subcontractor_name,
-            };
-        });
+    return `${days} ${days === 1 ? 'day' : 'days'}`;
 }
 
-function overlaps(startA: string, endA: string, startB: string, endB: string) {
-    return startA <= endB && endA >= startB;
+function taskDurationInputDays(task: TimelineTaskPayload) {
+    if (task.default_duration_working_days && task.default_duration_working_days > 0) {
+        return task.default_duration_working_days;
+    }
+
+    return taskDurationDays(task) + 1;
 }
 
 function taskDurationDays(task: TimelineTaskPayload) {
@@ -1109,21 +1452,6 @@ function taskDurationDays(task: TimelineTaskPayload) {
     );
 }
 
-function addDays(date: string, days: number) {
-    const next = new Date(`${date}T00:00:00`);
-    next.setDate(next.getDate() + days);
-
-    return next.toISOString().slice(0, 10);
-}
-
-function formatInputRange(start: string, due: string) {
-    const formatter = new Intl.DateTimeFormat('en-US', {
-        month: 'short',
-        day: 'numeric',
-    });
-
-    return `${formatter.format(new Date(`${start}T00:00:00`))} – ${formatter.format(new Date(`${due}T00:00:00`))}`;
-}
 
 function roleEyebrow(role: TimelineWorkspacePayload['role']) {
     if (role === 'company_admin' || role === 'super_admin') {

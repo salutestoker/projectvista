@@ -17,7 +17,7 @@ final class CompanyPolicy
 
     public function view(User $user, Company $company): bool
     {
-        return $user->belongsToCompany($company);
+        return $user->isSuperAdmin() || $user->belongsToCompany($company);
     }
 
     public function create(User $user): bool
@@ -34,5 +34,11 @@ final class CompanyPolicy
     public function manageUsers(User $user, Company $company): bool
     {
         return $this->update($user, $company);
+    }
+
+    public function manageTemplates(User $user, Company $company): bool
+    {
+        return $user->isSuperAdmin()
+            || in_array($user->companyRole($company), Roles::INTERNAL_ROLES, true);
     }
 }

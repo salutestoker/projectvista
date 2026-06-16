@@ -1,5 +1,5 @@
+import { DataTable } from '@/Components/ProjectVista/DataTable';
 import { ProjectVistaShell } from '@/Components/ProjectVista/ProjectVistaShell';
-import { StatusPill } from '@/Components/ProjectVista/StatusPill';
 import { Badge } from '@/Components/ui/badge';
 import { Button } from '@/Components/ui/button';
 import {
@@ -18,16 +18,9 @@ import {
     FieldLabel,
 } from '@/Components/ui/field';
 import { Input } from '@/Components/ui/input';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/Components/ui/table';
 import { ProjectPayload } from '@/types/projectvista';
 import { Head, Link, useForm } from '@inertiajs/react';
+import { ColumnDef } from '@tanstack/react-table';
 import {
     Download,
     FileText,
@@ -35,7 +28,7 @@ import {
     MoreHorizontal,
     UploadCloud,
 } from 'lucide-react';
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useMemo, useState } from 'react';
 
 interface ProjectDetailProps {
     project: ProjectPayload;
@@ -43,17 +36,16 @@ interface ProjectDetailProps {
 
 type ProjectFormData = {
     customer_name: string;
+    customer_email: string;
     address_line: string;
     city: string;
     state: string;
     postal_code: string;
     contract_amount: string;
-    starts_on: string;
-    estimated_completion_on: string;
-    project_type: string;
-    status: string;
-    phase: string;
+    contract_signed_on: string;
 };
+
+type AvailableSubcontractor = ProjectPayload['available_subcontractors'][number];
 
 export default function ProjectDetail({ project }: ProjectDetailProps) {
     const canUpdate = project.permissions.can_update_project;
@@ -137,7 +129,6 @@ function ProjectDetailHeader({
                     <h1 className="text-4xl font-semibold md:text-5xl">
                         {project.name}
                     </h1>
-                    <StatusPill status={project.status} />
                 </div>
                 <div className="text-muted-foreground flex flex-wrap gap-4 text-sm">
                     <span>Project ID: {project.project_code}</span>
@@ -215,13 +206,26 @@ function ProjectInformationCard({
                                 }
                             />
                             <FormField
-                                label="Estimated Construction Start Date"
-                                name="starts_on"
-                                type="date"
-                                value={form.data.starts_on}
-                                error={form.errors.starts_on}
+                                label="Customer Email"
+                                name="customer_email"
+                                type="email"
+                                value={form.data.customer_email}
+                                error={form.errors.customer_email}
                                 onChange={(value) =>
-                                    form.setData('starts_on', value)
+                                    form.setData('customer_email', value)
+                                }
+                            />
+                        </div>
+                        <div className="grid gap-5 md:grid-cols-2">
+                            <FormField
+                                label="Contract Signed Date"
+                                name="contract_signed_on"
+                                type="date"
+                                required
+                                value={form.data.contract_signed_on}
+                                error={form.errors.contract_signed_on}
+                                onChange={(value) =>
+                                    form.setData('contract_signed_on', value)
                                 }
                             />
                         </div>
@@ -272,48 +276,6 @@ function ProjectInformationCard({
                                     form.setData('contract_amount', value)
                                 }
                             />
-                            <FormField
-                                label="Projected Completion Date"
-                                name="estimated_completion_on"
-                                type="date"
-                                value={form.data.estimated_completion_on}
-                                error={form.errors.estimated_completion_on}
-                                onChange={(value) =>
-                                    form.setData(
-                                        'estimated_completion_on',
-                                        value,
-                                    )
-                                }
-                            />
-                        </div>
-                        <div className="grid gap-5 md:grid-cols-3">
-                            <FormField
-                                label="Project Type"
-                                name="project_type"
-                                value={form.data.project_type}
-                                error={form.errors.project_type}
-                                onChange={(value) =>
-                                    form.setData('project_type', value)
-                                }
-                            />
-                            <FormField
-                                label="Status"
-                                name="status"
-                                value={form.data.status}
-                                error={form.errors.status}
-                                onChange={(value) =>
-                                    form.setData('status', value)
-                                }
-                            />
-                            <FormField
-                                label="Current Phase"
-                                name="phase"
-                                value={form.data.phase}
-                                error={form.errors.phase}
-                                onChange={(value) =>
-                                    form.setData('phase', value)
-                                }
-                            />
                         </div>
                     </FieldGroup>
                 </form>
@@ -338,8 +300,14 @@ function ReadOnlyProjectInformation({ project }: { project: ProjectPayload }) {
                             value={project.client?.name ?? 'Client'}
                         />
                         <ReadOnlyField
-                            label="Estimated Construction Start Date"
-                            value={project.starts_on ?? 'TBD'}
+                            label="Customer Email"
+                            value={project.client?.email ?? 'TBD'}
+                        />
+                    </div>
+                    <div className="grid gap-5 md:grid-cols-2">
+                        <ReadOnlyField
+                            label="Contract Signed Date"
+                            value={project.contract_signed_on ?? 'TBD'}
                         />
                     </div>
                     <ReadOnlyField
@@ -350,11 +318,6 @@ function ReadOnlyProjectInformation({ project }: { project: ProjectPayload }) {
                         <ReadOnlyField
                             label="Contract Value"
                             value={formatMoney(project.contract_amount)}
-                        />
-                        <ReadOnlyField
-                            label="Current Phase"
-                            value={project.phase}
-                            gold
                         />
                     </div>
                 </FieldGroup>
@@ -621,7 +584,7 @@ function SubcontractorAssignmentCard({
         subcontractor_ids: initialIds,
     });
 
-    const toggleSubcontractor = (id: number, checked: boolean) => {
+    const toggleSubcontractor = useCallback((id: number, checked: boolean) => {
         const selected = new Set(form.data.subcontractor_ids);
 
         if (checked) {
@@ -631,7 +594,51 @@ function SubcontractorAssignmentCard({
         }
 
         form.setData('subcontractor_ids', Array.from(selected));
-    };
+    }, [form]);
+    const columns = useMemo<ColumnDef<AvailableSubcontractor>[]>(
+        () => [
+            {
+                id: 'selected',
+                header: '',
+                size: 48,
+                cell: ({ row }) => (
+                    <Checkbox
+                        checked={form.data.subcontractor_ids.includes(
+                            row.original.id,
+                        )}
+                        onCheckedChange={(nextChecked) =>
+                            toggleSubcontractor(
+                                row.original.id,
+                                nextChecked === true,
+                            )
+                        }
+                    />
+                ),
+            },
+            {
+                accessorKey: 'name',
+                header: 'Sub-Contractor',
+                cell: ({ row }) => (
+                    <span className="font-semibold">{row.original.name}</span>
+                ),
+            },
+            {
+                accessorKey: 'assigned_scope',
+                header: 'Trade',
+                cell: ({ row }) =>
+                    row.original.assigned_scope ??
+                    row.original.title ??
+                    'Assigned Trade Partner',
+            },
+            {
+                accessorKey: 'phone',
+                header: 'Contact',
+                cell: ({ row }) => row.original.phone ?? 'N/A',
+            },
+            { accessorKey: 'email', header: 'Email' },
+        ],
+        [form.data.subcontractor_ids, toggleSubcontractor],
+    );
 
     const submit = (event: FormEvent) => {
         event.preventDefault();
@@ -659,65 +666,14 @@ function SubcontractorAssignmentCard({
             </CardHeader>
             <form onSubmit={submit}>
                 <CardContent>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead />
-                                <TableHead>Sub-Contractor</TableHead>
-                                <TableHead>Trade</TableHead>
-                                <TableHead>Contact</TableHead>
-                                <TableHead>Email</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {project.available_subcontractors.map(
-                                (subcontractor) => {
-                                    const checked =
-                                        form.data.subcontractor_ids.includes(
-                                            subcontractor.id,
-                                        );
-
-                                    return (
-                                        <TableRow key={subcontractor.id}>
-                                            <TableCell>
-                                                <Checkbox
-                                                    checked={checked}
-                                                    onCheckedChange={(
-                                                        nextChecked,
-                                                    ) =>
-                                                        toggleSubcontractor(
-                                                            subcontractor.id,
-                                                            nextChecked ===
-                                                                true,
-                                                        )
-                                                    }
-                                                />
-                                            </TableCell>
-                                            <TableCell className="font-semibold">
-                                                {subcontractor.name}
-                                            </TableCell>
-                                            <TableCell>
-                                                {subcontractor.assigned_scope ??
-                                                    subcontractor.title ??
-                                                    'Assigned Trade Partner'}
-                                            </TableCell>
-                                            <TableCell>
-                                                {subcontractor.phone ?? 'N/A'}
-                                            </TableCell>
-                                            <TableCell>
-                                                {subcontractor.email}
-                                            </TableCell>
-                                        </TableRow>
-                                    );
-                                },
-                            )}
-                        </TableBody>
-                    </Table>
-                    {project.available_subcontractors.length === 0 ? (
-                        <div className="text-muted-foreground border-border mt-4 rounded-lg border p-5 text-sm">
-                            No company subcontractors are available to assign.
-                        </div>
-                    ) : null}
+                    <DataTable
+                        columns={columns}
+                        data={project.available_subcontractors}
+                        emptyMessage="No company subcontractors are available to assign."
+                        getRowId={(subcontractor) =>
+                            subcontractor.id.toString()
+                        }
+                    />
                 </CardContent>
                 <CardFooter className="justify-between">
                     <p className="text-muted-foreground text-sm">
@@ -760,7 +716,7 @@ function RoleContextCard({ project }: { project: ProjectPayload }) {
                 />
                 <ReadOnlyField
                     label="Current Task"
-                    value={task?.title ?? project.phase}
+                    value={task?.title ?? project.next_step ?? 'Timeline'}
                 />
             </CardContent>
         </Card>
@@ -775,25 +731,10 @@ function ProjectSummaryCard({ project }: { project: ProjectPayload }) {
             </CardHeader>
             <CardContent>
                 <dl className="flex flex-col gap-4 text-sm">
-                    <SummaryRow label="Project Type" value={project.project_type} />
                     <SummaryRow
                         label="Contract Value"
                         value={formatMoney(project.contract_amount)}
                     />
-                    <SummaryRow
-                        label="Start Date"
-                        value={project.starts_on ?? 'TBD'}
-                    />
-                    <SummaryRow
-                        label="Completion"
-                        value={project.estimated_completion_on ?? 'TBD'}
-                    />
-                    <div className="grid grid-cols-[1fr_auto] items-center gap-4">
-                        <dt className="text-muted-foreground">Status</dt>
-                        <dd>
-                            <StatusPill status={project.status} />
-                        </dd>
-                    </div>
                 </dl>
             </CardContent>
         </Card>
@@ -815,6 +756,7 @@ function FormField({
     value,
     error,
     type = 'text',
+    required = false,
     onChange,
 }: {
     label: string;
@@ -822,6 +764,7 @@ function FormField({
     value: string;
     error?: string;
     type?: string;
+    required?: boolean;
     onChange: (value: string) => void;
 }) {
     return (
@@ -831,6 +774,7 @@ function FormField({
                 id={name}
                 type={type}
                 value={value}
+                required={required}
                 aria-invalid={!!error}
                 onChange={(event) => onChange(event.target.value)}
             />
@@ -867,16 +811,13 @@ function ReadOnlyField({
 function projectFormDefaults(project: ProjectPayload): ProjectFormData {
     return {
         customer_name: project.client?.name ?? '',
+        customer_email: project.client?.email ?? '',
         address_line: project.address_line,
         city: project.city,
         state: project.state,
         postal_code: project.postal_code ?? '',
         contract_amount: project.contract_amount ?? '',
-        starts_on: project.starts_on_input ?? '',
-        estimated_completion_on: project.estimated_completion_on_input ?? '',
-        project_type: project.project_type,
-        status: project.status,
-        phase: project.phase,
+        contract_signed_on: project.contract_signed_on_input ?? '',
     };
 }
 

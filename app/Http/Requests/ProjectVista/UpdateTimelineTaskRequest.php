@@ -16,12 +16,10 @@ final class UpdateTimelineTaskRequest extends FormRequest
         $companyId = $this->route('project')->company_id;
 
         return [
-            'title' => ['required', 'string', 'max:255'],
-            'phase' => ['required', 'string', 'max:255'],
+            'title' => ['sometimes', 'required', 'string', 'max:255'],
             'description' => ['nullable', 'string', 'max:2000'],
             'status' => ['required', Rule::in(TimelineScheduler::STATUSES)],
-            'starts_on' => ['nullable', 'date'],
-            'due_on' => ['nullable', 'date', 'after_or_equal:starts_on'],
+            'duration_days' => ['nullable', 'integer', 'min:1', 'max:365'],
             'assigned_subcontractor_id' => [
                 'nullable',
                 'integer',
@@ -34,9 +32,14 @@ final class UpdateTimelineTaskRequest extends FormRequest
                 'integer',
                 Rule::exists('subcontractor_types', 'id')->where('company_id', $companyId),
             ],
-            'client_visible' => ['boolean'],
-            'subcontractor_visible' => ['boolean'],
+            'internal_only' => ['boolean'],
             'requires_acknowledgement' => ['boolean'],
+            'is_job_site_ready' => ['boolean'],
+            'are_materials_ready' => ['boolean'],
+            'is_customer_approval_required' => ['boolean'],
+            'is_customer_approval_received' => ['boolean'],
+            'internal_notes' => ['nullable', 'string', 'max:4000'],
+            'customer_notes' => ['nullable', 'string', 'max:4000'],
             'acknowledge_conflicts' => ['boolean'],
         ];
     }

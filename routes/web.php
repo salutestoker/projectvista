@@ -29,6 +29,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::get('/companies/{company:slug}/admin', [CompanyAdminController::class, 'show'])->name('companies.admin');
     Route::post('/companies/{company:slug}/invitations', [CompanyAdminController::class, 'invite'])->name('companies.invitations.store');
+    Route::post('/companies/{company:slug}/timeline-templates', [CompanyAdminController::class, 'storeTimelineTemplate'])->name('companies.timeline-templates.store');
+    Route::patch('/companies/{company:slug}/timeline-templates/{timelineTemplate}', [CompanyAdminController::class, 'updateTimelineTemplate'])->name('companies.timeline-templates.update');
 
     Route::get('/storage/project-documents/{projectId}/{filename}', [ProjectController::class, 'showDocumentFromStoragePath'])
         ->whereNumber('projectId')
@@ -36,15 +38,21 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->name('projects.documents.storage');
 
     Route::get('/projects', [ProjectController::class, 'index'])->name('projects.index');
+    Route::get('/timelines', [ProjectController::class, 'timelines'])->name('timelines.index');
+    Route::get('/projects/new', [ProjectController::class, 'create'])->name('projects.create');
+    Route::post('/projects', [ProjectController::class, 'store'])->name('projects.store');
     Route::get('/projects/{project:slug}', [ProjectController::class, 'show'])->name('projects.show');
     Route::patch('/projects/{project:slug}', [ProjectController::class, 'update'])->name('projects.update');
+    Route::delete('/projects/{project:slug}', [ProjectController::class, 'destroy'])->name('projects.destroy');
     Route::post('/projects/{project:slug}/media', [ProjectController::class, 'storeMedia'])->name('projects.media.store');
     Route::get('/projects/{project:slug}/media/{mediaAsset}', [ProjectController::class, 'showMedia'])->name('projects.media.show');
     Route::patch('/projects/{project:slug}/subcontractors', [ProjectController::class, 'updateSubcontractors'])->name('projects.subcontractors.update');
     Route::get('/projects/{project:slug}/timeline', [ProjectController::class, 'timeline'])->name('projects.timeline');
     Route::patch('/projects/{project:slug}/timeline/reorder', [ProjectController::class, 'reorderTimeline'])->name('projects.timeline.reorder');
     Route::post('/projects/{project:slug}/timeline/tasks', [ProjectController::class, 'storeTimelineTask'])->name('projects.timeline.tasks.store');
+    Route::post('/projects/{project:slug}/timeline/tasks/{task}/preview', [ProjectController::class, 'previewTimelineTask'])->name('projects.timeline.tasks.preview');
     Route::patch('/projects/{project:slug}/timeline/tasks/{task}', [ProjectController::class, 'updateTimelineTask'])->name('projects.timeline.tasks.update');
+    Route::delete('/projects/{project:slug}/timeline/tasks/{task}', [ProjectController::class, 'destroyTimelineTask'])->name('projects.timeline.tasks.destroy');
     Route::get('/projects/{project:slug}/selections', [ProjectController::class, 'selections'])->name('projects.selections');
     Route::get('/projects/{project:slug}/approvals', [ProjectController::class, 'approvals'])->name('projects.approvals');
     Route::get('/projects/{project:slug}/payments', [ProjectController::class, 'payments'])->name('projects.payments');

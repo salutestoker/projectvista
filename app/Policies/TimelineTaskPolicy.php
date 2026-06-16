@@ -19,15 +19,42 @@ final class TimelineTaskPolicy
         $projectRole = $timelineTask->project_id ? $user->projectRole($timelineTask->project_id) : null;
 
         return match ($projectRole) {
-            Roles::CLIENT => $timelineTask->client_visible,
-            Roles::SUBCONTRACTOR => $timelineTask->subcontractor_visible,
+            Roles::CLIENT => ! $timelineTask->internal_only,
+            Roles::SUBCONTRACTOR => $timelineTask->assigned_subcontractor_id === $user->id,
             default => false,
         };
     }
 
     public function update(User $user, TimelineTask $timelineTask): bool
     {
+        return ! $timelineTask->is_system
+            && ($user->isSuperAdmin()
+                || in_array($user->companyRole($timelineTask->company_id), Roles::INTERNAL_ROLES, true));
+    }
+
+    public function delete(User $user, TimelineTask $timelineTask): bool
+    {
+        return $this->update($user, $timelineTask);
+    }
+
+    public function rescheduleTask(User $user, TimelineTask $timelineTask): bool
+    {
+        return $this->update($user, $timelineTask);
+    }
+
+    public function previewConflicts(User $user, TimelineTask $timelineTask): bool
+    {
+        return $this->update($user, $timelineTask);
+    }
+
+    public function viewInternalConflicts(User $user, TimelineTask $timelineTask): bool
+    {
         return $user->isSuperAdmin()
             || in_array($user->companyRole($timelineTask->company_id), Roles::INTERNAL_ROLES, true);
+    }
+
+    public function overrideScheduleConflict(User $user, TimelineTask $timelineTask): bool
+    {
+        return false;
     }
 }

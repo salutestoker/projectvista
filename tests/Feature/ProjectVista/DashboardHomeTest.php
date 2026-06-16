@@ -27,8 +27,8 @@ final class DashboardHomeTest extends TestCase
                 ->where('role', 'company_admin')
                 ->where('home.type', 'owner')
                 ->has('home.metrics', 5)
-                ->has('home.project_rows', 5)
-                ->where('stats.active_projects', 5));
+                ->has('home.project_rows', 6)
+                ->where('stats.active_projects', 6));
     }
 
     public function test_company_manager_receives_manager_dashboard_home_payload(): void
@@ -45,7 +45,7 @@ final class DashboardHomeTest extends TestCase
                 ->where('role', 'company_manager')
                 ->where('home.type', 'manager')
                 ->has('home.metrics', 5)
-                ->has('home.project_rows', 5));
+                ->has('home.project_rows', 6));
     }
 
     public function test_subcontractor_home_payload_hides_payments_and_messages(): void
@@ -61,7 +61,7 @@ final class DashboardHomeTest extends TestCase
                 ->component('ProjectVista/Dashboard')
                 ->where('role', 'subcontractor')
                 ->where('home.type', 'subcontractor')
-                ->has('home.project_rows', 5)
+                ->has('home.project_rows', 6)
                 ->where('home.project_rows', fn ($rows) => collect($rows)
                     ->every(fn (array $row) => ! array_key_exists('payment_total', $row)
                         && ! array_key_exists('payment_paid', $row)

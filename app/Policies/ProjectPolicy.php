@@ -40,6 +40,7 @@ final class ProjectPolicy
     public function delete(User $user, Project $project): bool
     {
         return $user->isSuperAdmin()
-            || $user->companyRole($project->company_id) === Roles::COMPANY_ADMIN;
+            || in_array($user->companyRole($project->company_id), Roles::INTERNAL_ROLES, true)
+            || $user->projectRole($project) === Roles::COMPANY_MANAGER;
     }
 }

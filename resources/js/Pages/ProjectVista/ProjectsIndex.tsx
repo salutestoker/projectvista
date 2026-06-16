@@ -1,4 +1,6 @@
 import { AnimatedProgress } from '@/Components/ProjectVista/AnimatedProgress';
+import { DataTable } from '@/Components/ProjectVista/DataTable';
+import { DeleteIconButton } from '@/Components/ProjectVista/DeleteIconButton';
 import { ProjectVistaShell } from '@/Components/ProjectVista/ProjectVistaShell';
 import { Badge } from '@/Components/ui/badge';
 import { Button } from '@/Components/ui/button';
@@ -11,14 +13,7 @@ import {
     SelectItem,
     SelectTrigger,
 } from '@/Components/ui/select';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/Components/ui/table';
+import { useConfirm } from '@/Context/ConfirmContext';
 import { cn } from '@/lib/utils';
 import {
     DashboardMetricPayload,
@@ -27,7 +22,8 @@ import {
     ProjectPayload,
     ProjectVistaRole,
 } from '@/types/projectvista';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
+import { ColumnDef } from '@tanstack/react-table';
 import { Circle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
@@ -60,6 +56,7 @@ export default function ProjectsIndex({
     const [status, setStatus] = useState('all');
     const [manager, setManager] = useState('all');
     const [client, setClient] = useState('all');
+    const confirm = useConfirm();
 
     const filteredRows = useMemo(() => {
         const term = search.trim().toLowerCase();
@@ -96,13 +93,45 @@ export default function ProjectsIndex({
     }, [client, manager, rows, search, status]);
 
     const isSubcontractor = role === 'subcontractor';
+    const canCreateProject = [
+        'super_admin',
+        'company_admin',
+        'company_manager',
+    ].includes(role);
     const showMetricGrid =
         role !== 'company_admin' &&
         role !== 'company_manager' &&
         role !== 'subcontractor';
     const primaryAction = isSubcontractor
         ? { label: 'Schedule' }
-        : { label: '+ New Project' };
+        : canCreateProject
+          ? { label: '+ New Project', href: route('projects.create') }
+          : undefined;
+    const deleteProject = async (project: ProjectIndexRowPayload) => {
+        const confirmed = await confirm({
+            title: 'Delete project?',
+            message: (
+                <>
+                    This will remove{' '}
+                    <span className="text-foreground font-semibold">
+                        {project.name}
+                    </span>{' '}
+                    from the project list.
+                </>
+            ),
+            confirmText: 'Delete Project',
+            danger: true,
+            requireExplicitAction: true,
+        });
+
+        if (!confirmed) {
+            return;
+        }
+
+        router.delete(route('projects.destroy', project.slug), {
+            preserveScroll: true,
+        });
+    };
 
     return (
         <ProjectVistaShell
@@ -187,7 +216,11 @@ export default function ProjectsIndex({
                     {isSubcontractor ? (
                         <SubcontractorTable rows={filteredRows} />
                     ) : (
-                        <BusinessTable role={role} rows={filteredRows} />
+                        <BusinessTable
+                            role={role}
+                            rows={filteredRows}
+                            onDeleteProject={deleteProject}
+                        />
                     )}
 
                     <p className="text-muted-foreground text-sm">
@@ -290,132 +323,179 @@ function FilterSelect({
 function BusinessTable({
     role,
     rows,
+    onDeleteProject,
 }: {
     role: ProjectVistaRole;
     rows: ProjectIndexRowPayload[];
+    onDeleteProject: (project: ProjectIndexRowPayload) => void;
 }) {
     const showManager = role === 'company_admin' || role === 'super_admin';
+    const showActions = [
+        'super_admin',
+        'company_admin',
+        'company_manager',
+    ].includes(role);
+    const columns = useMemo<ColumnDef<ProjectIndexRowPayload>[]>(
+        () => [
+            {
+                accessorKey: 'name',
+                header: 'Project',
+                cell: ({ row }) => <ProjectCell project={row.original} />,
+            },
+            {
+                accessorKey: 'location',
+                header: 'Location',
+            },
+            ...(showManager
+                ? ([
+                      {
+                          accessorKey: 'manager',
+                          header: 'Manager',
+                          cell: ({ row }) =>
+                              row.original.manager ?? 'Unassigned',
+                      },
+                  ] satisfies ColumnDef<ProjectIndexRowPayload>[])
+                : []),
+            {
+                accessorKey: 'progress',
+                header: 'Progress',
+                cell: ({ row }) => (
+                    <div className="flex min-w-32 flex-col gap-1">
+                        <span className="font-semibold">
+                            {row.original.progress}%
+                        </span>
+                        <AnimatedProgress value={row.original.progress} />
+                    </div>
+                ),
+            },
+            {
+                accessorKey: 'next_step',
+                header: 'Next Step',
+                cell: ({ row }) => (
+                    <>
+                        <div className="font-medium">
+                            {row.original.next_step}
+                        </div>
+                        <div className="text-muted-foreground text-sm">
+                            {row.original.date_range}
+                        </div>
+                    </>
+                ),
+            },
+            {
+                accessorKey: 'approvals',
+                header: 'Approvals',
+                cell: ({ row }) => (
+                    <span className="inline-flex items-center gap-2">
+                        <Circle className="fill-pv-red text-pv-red size-2" />
+                        {row.original.approvals ?? 0}
+                    </span>
+                ),
+            },
+            {
+                accessorKey: 'payment_percent',
+                header: 'Payments',
+                cell: ({ row }) => (
+                    <div className="min-w-36">
+                        <div className="font-semibold">
+                            {row.original.payment_percent ?? 0}%
+                        </div>
+                        <AnimatedProgress
+                            value={row.original.payment_percent ?? 0}
+                        />
+                        <div className="text-muted-foreground text-xs">
+                            {row.original.payment_paid} of{' '}
+                            {row.original.payment_total}
+                        </div>
+                    </div>
+                ),
+            },
+            {
+                accessorKey: 'status_label',
+                header: 'Status',
+                cell: ({ row }) => (
+                    <ProjectStatusBadge label={row.original.status_label} />
+                ),
+            },
+            {
+                accessorKey: 'messages',
+                header: 'Messages',
+                cell: ({ row }) => (
+                    <span className="inline-flex items-center gap-2">
+                        <Circle className="fill-pv-blue text-pv-blue size-2" />
+                        {row.original.messages ?? 0}
+                    </span>
+                ),
+            },
+            ...(showActions
+                ? ([
+                      {
+                          id: 'actions',
+                          header: () => (
+                              <span className="sr-only">Actions</span>
+                          ),
+                          size: 48,
+                          cell: ({ row }) => (
+                              <div className="text-right">
+                                  {row.original.can_delete_project ? (
+                                      <DeleteIconButton
+                                          label={`Delete ${row.original.name}`}
+                                          onClick={() =>
+                                              onDeleteProject(row.original)
+                                          }
+                                      />
+                                  ) : null}
+                              </div>
+                          ),
+                      },
+                  ] satisfies ColumnDef<ProjectIndexRowPayload>[])
+                : []),
+        ],
+        [onDeleteProject, showActions, showManager],
+    );
 
     return (
         <div className="border-border bg-card/80 overflow-hidden rounded-xl border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead>Project</TableHead>
-                        <TableHead>Location</TableHead>
-                        {showManager ? <TableHead>Manager</TableHead> : null}
-                        <TableHead>Progress</TableHead>
-                        <TableHead>Next Step</TableHead>
-                        <TableHead>Approvals</TableHead>
-                        <TableHead>Payments</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Messages</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {rows.map((project) => (
-                        <TableRow key={project.id}>
-                            <TableCell>
-                                <ProjectCell project={project} />
-                            </TableCell>
-                            <TableCell>{project.location}</TableCell>
-                            {showManager ? (
-                                <TableCell>
-                                    {project.manager ?? 'Unassigned'}
-                                </TableCell>
-                            ) : null}
-                            <TableCell>
-                                <div className="flex min-w-32 flex-col gap-1">
-                                    <span className="font-semibold">
-                                        {project.progress}%
-                                    </span>
-                                    <AnimatedProgress
-                                        value={project.progress}
-                                    />
-                                </div>
-                            </TableCell>
-                            <TableCell>
-                                <div className="font-medium">
-                                    {project.next_step}
-                                </div>
-                                <div className="text-muted-foreground text-sm">
-                                    {project.date_range}
-                                </div>
-                            </TableCell>
-                            <TableCell>
-                                <span className="inline-flex items-center gap-2">
-                                    <Circle className="fill-pv-red text-pv-red size-2" />
-                                    {project.approvals ?? 0}
-                                </span>
-                            </TableCell>
-                            <TableCell>
-                                <div className="min-w-36">
-                                    <div className="font-semibold">
-                                        {project.payment_percent ?? 0}%
-                                    </div>
-                                    <AnimatedProgress
-                                        value={project.payment_percent ?? 0}
-                                    />
-                                    <div className="text-muted-foreground text-xs">
-                                        {project.payment_paid} of{' '}
-                                        {project.payment_total}
-                                    </div>
-                                </div>
-                            </TableCell>
-                            <TableCell>
-                                <ProjectStatusBadge
-                                    label={project.status_label}
-                                />
-                            </TableCell>
-                            <TableCell>
-                                <span className="inline-flex items-center gap-2">
-                                    <Circle className="fill-pv-blue text-pv-blue size-2" />
-                                    {project.messages ?? 0}
-                                </span>
-                            </TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
+            <DataTable
+                columns={columns}
+                data={rows}
+                getRowId={(project) => project.id.toString()}
+            />
         </div>
     );
 }
 
 function SubcontractorTable({ rows }: { rows: ProjectIndexRowPayload[] }) {
+    const columns = useMemo<ColumnDef<ProjectIndexRowPayload>[]>(
+        () => [
+            {
+                accessorKey: 'name',
+                header: 'Project',
+                cell: ({ row }) => <ProjectCell project={row.original} />,
+            },
+            { accessorKey: 'location', header: 'Location' },
+            { accessorKey: 'role_label', header: 'Your Role' },
+            { accessorKey: 'current_task', header: 'Current Task' },
+            { accessorKey: 'start_date', header: 'Start' },
+            { accessorKey: 'due_date', header: 'Due' },
+            {
+                accessorKey: 'status_label',
+                header: 'Status',
+                cell: ({ row }) => (
+                    <ProjectStatusBadge label={row.original.status_label} />
+                ),
+            },
+        ],
+        [],
+    );
+
     return (
         <div className="border-border bg-card/80 overflow-hidden rounded-xl border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead>Project</TableHead>
-                        <TableHead>Location</TableHead>
-                        <TableHead>Your Role</TableHead>
-                        <TableHead>Current Task</TableHead>
-                        <TableHead>Start</TableHead>
-                        <TableHead>Due</TableHead>
-                        <TableHead>Status</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {rows.map((project) => (
-                        <TableRow key={project.id}>
-                            <TableCell>
-                                <ProjectCell project={project} />
-                            </TableCell>
-                            <TableCell>{project.location}</TableCell>
-                            <TableCell>{project.role_label}</TableCell>
-                            <TableCell>{project.current_task}</TableCell>
-                            <TableCell>{project.start_date}</TableCell>
-                            <TableCell>{project.due_date}</TableCell>
-                            <TableCell>
-                                <ProjectStatusBadge
-                                    label={project.status_label}
-                                />
-                            </TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
+            <DataTable
+                columns={columns}
+                data={rows}
+                getRowId={(project) => project.id.toString()}
+            />
         </div>
     );
 }

@@ -17,6 +17,7 @@ use App\Models\Selection;
 use App\Models\SelectionCategory;
 use App\Models\SubcontractorType;
 use App\Models\TimelineTask;
+use App\Models\TimelineTaskTemplate;
 use App\Models\TimelineTemplate;
 use App\Models\User;
 use App\Support\ProjectVista\Roles;
@@ -199,14 +200,12 @@ class DatabaseSeeder extends Seeder
             'city' => 'Scottsdale',
             'state' => 'Arizona',
             'postal_code' => '85255',
-            'project_type' => 'Luxury Pool & Outdoor Living',
-            'status' => 'active',
-            'phase' => 'Tile Installation',
+            'client_name' => $client->name,
+            'client_email' => $client->email,
             'percent_complete' => 62,
             'health_status' => 'needs_client_decision',
             'contract_amount' => 286500,
-            'starts_on' => now()->subMonths(3),
-            'estimated_completion_on' => now()->addWeeks(7),
+            'contract_signed_on' => now()->subMonths(4),
             'hero_image_path' => 'demo/smith-residence-hero.png',
             'client_summary' => 'A resort-style pool, spa, sun shelf, fire feature, and outdoor kitchen designed around evening entertaining.',
             'latest_update' => 'Your pool tile installation has officially started, and the coping phase is now complete.',
@@ -221,11 +220,11 @@ class DatabaseSeeder extends Seeder
             'address_line' => '1107 W Ocotillo Lane',
             'city' => 'Phoenix',
             'state' => 'Arizona',
-            'project_type' => 'Masonry',
-            'status' => 'active',
-            'phase' => 'Stone Layout',
+            'client_name' => 'Canyon Client',
+            'client_email' => 'client@desertmasonry.test',
             'percent_complete' => 31,
             'health_status' => 'on_track',
+            'contract_signed_on' => now()->subMonths(2),
         ]);
 
         $project->users()->attach($manager->id, [
@@ -248,26 +247,31 @@ class DatabaseSeeder extends Seeder
             'description' => 'Default phase sequence for high-touch pool construction.',
             'is_default' => true,
         ]);
+        $this->seedDefaultTimelineTaskTemplates($timelineTemplate, $subcontractorTypes);
 
         $timelineRows = [
-            ['Design Approval', 'Preconstruction', 'completed', -82, -74, true],
-            ['Permitting & Engineering', 'Preconstruction', 'completed', -73, -47, false],
-            ['Excavation', 'Construction', 'completed', -38, -35, false],
-            ['Steel & Plumbing Rough-In', 'Construction', 'completed', -34, -24, true],
-            ['Gunite Shell', 'Construction', 'completed', -23, -19, false],
-            ['Coping Complete', 'Finishes', 'completed', -12, -4, true],
-            ['Tile Installation', 'Finishes', 'in_progress', -3, 8, true],
-            ['Decking Approval Needed', 'Finishes', 'blocked', 2, 5, false],
-            ['Interior Finish', 'Startup', 'upcoming', 16, 24, false],
-            ['Water Fill & Orientation', 'Handoff', 'upcoming', 28, 35, false],
+            ['Contract Signed', 'Preconstruction', 'complete', -90, -90, false, true],
+            ['Design Approval', 'Preconstruction', 'complete', -82, -74, true, false],
+            ['Permitting & Engineering', 'Preconstruction', 'complete', -73, -47, false, false],
+            ['Excavation', 'Construction', 'complete', -38, -35, false, false],
+            ['Steel & Plumbing Rough-In', 'Construction', 'complete', -34, -24, true, false],
+            ['Gunite Shell', 'Construction', 'complete', -23, -19, false, false],
+            ['Coping Complete', 'Finishes', 'complete', -12, -4, true, false],
+            ['Tile Installation', 'Finishes', 'in_progress', -3, 8, true, false],
+            ['Decking Approval Needed', 'Finishes', 'blocked', 2, 5, false, false],
+            ['Interior Finish', 'Startup', 'upcoming', 16, 24, false, false],
+            ['Water Fill & Orientation', 'Handoff', 'upcoming', 28, 35, false, false],
         ];
 
-        foreach ($timelineRows as $index => [$title, $phase, $status, $startsOffset, $dueOffset, $subVisible]) {
+        foreach ($timelineRows as $index => [$title, $phase, $status, $startsOffset, $dueOffset, $subVisible, $isSystem]) {
             $assignment = $subVisible ? $this->omniSubcontractorForTask($omniSubcontractors, $title.' '.$phase) : null;
 
             if ($assignment !== null) {
                 $this->attachProjectSubcontractor($project, $assignment);
             }
+
+            $startsOn = $isSystem ? $project->contract_signed_on : now()->addDays($startsOffset);
+            $dueOn = $isSystem ? $project->contract_signed_on : now()->addDays($dueOffset);
 
             TimelineTask::query()->create([
                 'company_id' => $company->id,
@@ -276,17 +280,16 @@ class DatabaseSeeder extends Seeder
                 'assigned_subcontractor_id' => $assignment['user']->id ?? null,
                 'subcontractor_type_id' => $assignment['type']->id ?? null,
                 'title' => $title,
-                'phase' => $phase,
                 'description' => $title === 'Decking Approval Needed'
                     ? 'Homeowner approval keeps the next finish stage moving without a schedule pause.'
                     : 'Project milestone for the Smith Residence build.',
                 'sort_order' => $index + 1,
                 'status' => $status,
-                'starts_on' => now()->addDays($startsOffset),
-                'due_on' => now()->addDays($dueOffset),
-                'completed_on' => $status === 'completed' ? now()->addDays($dueOffset) : null,
-                'client_visible' => true,
-                'subcontractor_visible' => $subVisible,
+                'starts_on' => $startsOn,
+                'due_on' => $dueOn,
+                'completed_on' => $status === 'complete' ? $dueOn : null,
+                'internal_only' => false,
+                'is_system' => $isSystem,
                 'requires_acknowledgement' => $title === 'Decking Approval Needed',
             ]);
         }
@@ -465,6 +468,7 @@ class DatabaseSeeder extends Seeder
             ['Williams Residence', 'williams-residence', 'Phoenix', 'Decking Layout', 75, 120000, 96000, 3, 8, 1, 5],
             ['Brown Residence', 'brown-residence', 'Chandler', 'Excavation', 35, 80000, 32000, 2, 2, -4, 1],
             ['Davis Residence', 'davis-residence', 'Scottsdale', 'Startup & Balance', 90, 120000, 108000, 1, 5, 3, 6],
+            ['Miller Residence', 'miller-residence', 'Scottsdale', 'Tile Installation', 58, 154000, 62000, 1, 4, 2, 4],
         ] as [$projectName, $slug, $city, $phase, $progress, $contractAmount, $paidAmount, $approvalCount, $messageCount, $startOffset, $dueOffset]) {
             $extraProject = Project::query()->create([
                 'company_id' => $company->id,
@@ -475,14 +479,12 @@ class DatabaseSeeder extends Seeder
                 'city' => $city,
                 'state' => 'AZ',
                 'postal_code' => '85255',
-                'project_type' => 'Luxury Pool & Outdoor Living',
-                'status' => 'active',
-                'phase' => $phase,
+                'client_name' => str($projectName)->before(' Residence')->append(' Client')->toString(),
+                'client_email' => Str::slug($projectName).'@example.test',
                 'percent_complete' => $progress,
                 'health_status' => $approvalCount > 1 ? 'needs_client_decision' : 'on_track',
                 'contract_amount' => $contractAmount,
-                'starts_on' => now()->subWeeks(8),
-                'estimated_completion_on' => now()->addWeeks(6),
+                'contract_signed_on' => now()->addDays($startOffset - 45),
                 'hero_image_path' => 'demo/smith-residence-hero.png',
                 'client_summary' => 'A premium outdoor living project tracked through ProjectVista.',
                 'latest_update' => "{$phase} is the current focus for {$projectName}.",
@@ -498,15 +500,19 @@ class DatabaseSeeder extends Seeder
             $this->attachProjectSubcontractor($extraProject, $omniSubcontractors->get('tile-stone'));
 
             foreach ([
-                ['Preconstruction Complete', 'Preconstruction', 'completed', -30, -20, false],
-                [$phase, 'Construction', $progress > 80 ? 'upcoming' : 'in_progress', $startOffset, $dueOffset, true],
-                ['Client Review', 'Finishes', $approvalCount > 1 ? 'blocked' : 'upcoming', $dueOffset + 1, $dueOffset + 4, false],
-            ] as $index => [$title, $taskPhase, $status, $startsOffset, $taskDueOffset, $subVisible]) {
+                ['Contract Signed', 'Preconstruction', 'complete', $startOffset - 45, $startOffset - 45, false, true],
+                ['Preconstruction Complete', 'Preconstruction', 'complete', -30, -20, false, false],
+                [$phase, 'Construction', $progress > 80 ? 'upcoming' : 'in_progress', $startOffset, $dueOffset, true, false],
+                ['Client Review', 'Finishes', $approvalCount > 1 ? 'blocked' : 'upcoming', $dueOffset + 1, $dueOffset + 4, false, false],
+            ] as $index => [$title, $taskPhase, $status, $startsOffset, $taskDueOffset, $subVisible, $isSystem]) {
                 $assignment = $subVisible ? $this->omniSubcontractorForTask($omniSubcontractors, $title.' '.$phase.' '.$projectName) : null;
 
                 if ($assignment !== null) {
                     $this->attachProjectSubcontractor($extraProject, $assignment);
                 }
+
+                $startsOn = $isSystem ? $extraProject->contract_signed_on : now()->addDays($startsOffset);
+                $dueOn = $isSystem ? $extraProject->contract_signed_on : now()->addDays($taskDueOffset);
 
                 TimelineTask::query()->create([
                     'company_id' => $company->id,
@@ -515,15 +521,14 @@ class DatabaseSeeder extends Seeder
                     'assigned_subcontractor_id' => $assignment['user']->id ?? null,
                     'subcontractor_type_id' => $assignment['type']->id ?? null,
                     'title' => $title,
-                    'phase' => $taskPhase,
                     'description' => 'Demo milestone for the expanded ProjectVista home dashboard.',
                     'sort_order' => $index + 1,
                     'status' => $status,
-                    'starts_on' => now()->addDays($startsOffset),
-                    'due_on' => now()->addDays($taskDueOffset),
-                    'completed_on' => $status === 'completed' ? now()->addDays($taskDueOffset) : null,
-                    'client_visible' => true,
-                    'subcontractor_visible' => $subVisible,
+                    'starts_on' => $startsOn,
+                    'due_on' => $dueOn,
+                    'completed_on' => $status === 'complete' ? $dueOn : null,
+                    'internal_only' => false,
+                    'is_system' => $isSystem,
                     'requires_acknowledgement' => $status === 'blocked',
                 ]);
             }
@@ -535,14 +540,12 @@ class DatabaseSeeder extends Seeder
                 'assigned_subcontractor_id' => $subcontractor->id,
                 'subcontractor_type_id' => $subcontractorTypes->get('tile-stone')->id,
                 'title' => 'Tile Detail Review',
-                'phase' => 'Finishes',
                 'description' => 'Shared tile coordination item for the expanded subcontractor demo account.',
-                'sort_order' => 4,
+                'sort_order' => 5,
                 'status' => 'upcoming',
                 'starts_on' => now()->addDays($startOffset + 2),
                 'due_on' => now()->addDays($dueOffset + 2),
-                'client_visible' => true,
-                'subcontractor_visible' => true,
+                'internal_only' => false,
             ]);
 
             $extraSelection = Selection::query()->create([
@@ -634,6 +637,7 @@ class DatabaseSeeder extends Seeder
                 ]);
             }
         }
+        $this->seedTimelineConflictExamples($company, $project, $omniSubcontractors, $subcontractorTypes);
 
         Invitation::query()->create([
             'company_id' => $company->id,
@@ -817,6 +821,7 @@ class DatabaseSeeder extends Seeder
             'description' => 'Demo timeline used to populate role-specific ProjectVista dashboards.',
             'is_default' => true,
         ]);
+        $this->seedDefaultTimelineTaskTemplates($timelineTemplate, $subcontractorTypes);
 
         $categories = collect([
             ['Materials', 'Material and finish decisions', 1],
@@ -920,14 +925,12 @@ class DatabaseSeeder extends Seeder
             'city' => $projectData['city'],
             'state' => $projectData['state'],
             'postal_code' => fake()->postcode(),
-            'project_type' => $projectData['type'],
-            'status' => 'active',
-            'phase' => $projectData['phase'],
+            'client_name' => str($projectData['name'])->before(' Residence')->append(' Client')->toString(),
+            'client_email' => Str::slug($projectData['name']).'@example.test',
             'percent_complete' => $projectData['progress'],
             'health_status' => $projectData['health'],
             'contract_amount' => $contractAmount,
-            'starts_on' => now()->addDays($projectData['offset']),
-            'estimated_completion_on' => now()->addDays($projectData['offset'] + 118),
+            'contract_signed_on' => now()->addDays($projectData['offset'] - 45),
             'hero_image_path' => 'demo/smith-residence-hero.png',
             'client_summary' => $projectData['type'].' managed through a polished client portal with decisions, progress, and documents in one place.',
             'latest_update' => $projectData['phase'].' is the current focus. The team added new notes, photos, and decision items for this week.',
@@ -951,17 +954,22 @@ class DatabaseSeeder extends Seeder
         ]);
 
         $phasePlan = [
-            ['Discovery & Scope', 'Preconstruction', 'completed', -82, -70, false],
-            ['Design Confirmation', 'Preconstruction', 'completed', -69, -55, true],
-            ['Permitting & Procurement', 'Preconstruction', $projectData['progress'] > 30 ? 'completed' : 'in_progress', -54, -31, false],
-            ['Site Preparation', 'Construction', $projectData['progress'] > 45 ? 'completed' : 'in_progress', -30, -17, true],
-            [$projectData['phase'], 'Construction', 'in_progress', -6, 8, true],
-            ['Client Decision Review', 'Finishes', $projectData['approvals'] > 1 ? 'blocked' : 'upcoming', 9, 14, false],
-            ['Finish Installation', 'Finishes', $projectData['progress'] > 75 ? 'in_progress' : 'upcoming', 18, 35, true],
-            ['Final Walkthrough', 'Handoff', 'upcoming', 46, 50, false],
+            ['Contract Signed', 'Preconstruction', 'complete', -90, -90, false, true],
+            ['Discovery & Scope', 'Preconstruction', 'complete', -82, -70, false, false],
+            ['Design Confirmation', 'Preconstruction', 'complete', -69, -55, true, false],
+            ['Permitting & Procurement', 'Preconstruction', $projectData['progress'] > 30 ? 'complete' : 'in_progress', -54, -31, false, false],
+            ['Site Preparation', 'Construction', $projectData['progress'] > 45 ? 'complete' : 'in_progress', -30, -17, true, false],
+            [$projectData['phase'], 'Construction', 'in_progress', -6, 8, true, false],
+            ['Client Decision Review', 'Finishes', $projectData['approvals'] > 1 ? 'blocked' : 'upcoming', 9, 14, false, false],
+            ['Finish Installation', 'Finishes', $projectData['progress'] > 75 ? 'in_progress' : 'upcoming', 18, 35, true, false],
+            ['Final Walkthrough', 'Handoff', 'upcoming', 46, 50, false, false],
         ];
 
-        foreach ($phasePlan as $order => [$title, $phase, $status, $startsOffset, $dueOffset, $subVisible]) {
+        foreach ($phasePlan as $order => [$title, $phase, $status, $startsOffset, $dueOffset, $subVisible, $isSystem]) {
+            $scheduleOffset = (int) floor($projectData['offset'] / 8);
+            $startsOn = $isSystem ? $project->contract_signed_on : now()->addDays($startsOffset + $scheduleOffset);
+            $dueOn = $isSystem ? $project->contract_signed_on : now()->addDays($dueOffset + $scheduleOffset);
+
             TimelineTask::query()->create([
                 'company_id' => $company->id,
                 'project_id' => $project->id,
@@ -969,17 +977,16 @@ class DatabaseSeeder extends Seeder
                 'assigned_subcontractor_id' => $subVisible ? $subcontractor->id : null,
                 'subcontractor_type_id' => $subVisible ? $subcontractorType->id : null,
                 'title' => $title,
-                'phase' => $phase,
                 'description' => $title === 'Client Decision Review'
                     ? 'A client decision is needed before the team can release the next field window.'
                     : 'Demo timeline item for project visibility and role-specific work planning.',
                 'sort_order' => $order + 1,
                 'status' => $status,
-                'starts_on' => now()->addDays($startsOffset + (int) floor($projectData['offset'] / 8)),
-                'due_on' => now()->addDays($dueOffset + (int) floor($projectData['offset'] / 8)),
-                'completed_on' => $status === 'completed' ? now()->addDays($dueOffset + (int) floor($projectData['offset'] / 8)) : null,
-                'client_visible' => true,
-                'subcontractor_visible' => $subVisible,
+                'starts_on' => $startsOn,
+                'due_on' => $dueOn,
+                'completed_on' => $status === 'complete' ? $dueOn : null,
+                'internal_only' => false,
+                'is_system' => $isSystem,
                 'requires_acknowledgement' => $status === 'blocked',
             ]);
         }
@@ -1148,6 +1155,142 @@ class DatabaseSeeder extends Seeder
             'ai_update_writer' => false,
             'custom_domain' => $premium,
         ];
+    }
+
+    private function seedDefaultTimelineTaskTemplates(TimelineTemplate $timelineTemplate, Collection $subcontractorTypes): void
+    {
+        foreach ([
+            ['Contract Signed', 1, null],
+            ['Permit Received', 1, null],
+            ['Pre-Construction', 1, null],
+            ['Layout', 1, 'pool-construction'],
+            ['Excavation', 2, 'excavation'],
+            ['Plumbing', 3, 'plumbing'],
+            ['Electric', 2, 'electrical'],
+            ['Steel', 3, null],
+            ['Shotcrete', 1, null],
+            ['Tile', 5, 'tile-stone'],
+            ['Hardscape', 7, 'hardscape'],
+            ['Interior', 2, 'pool-construction'],
+            ['Startup', 2, null],
+        ] as $index => [$name, $duration, $typeSlug]) {
+            $type = $typeSlug === null ? null : $subcontractorTypes->get($typeSlug);
+
+            TimelineTaskTemplate::query()->create([
+                'company_id' => $timelineTemplate->company_id,
+                'timeline_template_id' => $timelineTemplate->id,
+                'default_subcontractor_type_id' => $type?->id,
+                'name' => $name,
+                'description' => 'Default ProjectVista pool construction milestone.',
+                'sequence_order' => $index + 1,
+                'default_duration_working_days' => $duration,
+                'internal_only' => false,
+                'is_system' => $index === 0,
+            ]);
+        }
+    }
+
+    private function seedTimelineConflictExamples(
+        Company $company,
+        Project $smithProject,
+        Collection $omniSubcontractors,
+        Collection $subcontractorTypes,
+    ): void {
+        $tileAssignment = $omniSubcontractors->get('tile-stone');
+        $deckAssignment = $omniSubcontractors->get('decking');
+        $landscapeAssignment = $omniSubcontractors->get('landscaping');
+        $millerProject = Project::query()
+            ->where('company_id', $company->id)
+            ->where('slug', 'miller-residence')
+            ->first();
+        $williamsProject = Project::query()
+            ->where('company_id', $company->id)
+            ->where('slug', 'williams-residence')
+            ->first();
+        $tileConflictDate = now()->month(5)->day(29);
+        $tileConflictDate = $tileConflictDate->isPast() ? $tileConflictDate->addYear() : $tileConflictDate;
+        $tradeConflictDate = $tileConflictDate->copy()->addDay();
+
+        if ($tileAssignment !== null) {
+            $this->attachProjectSubcontractor($smithProject, $tileAssignment);
+            $this->pinTaskConflictDate(
+                $smithProject,
+                'Tile Installation',
+                $tileConflictDate->toDateString(),
+                $tileConflictDate->toDateString(),
+                $tileAssignment['user']->id,
+                $tileAssignment['type']->id,
+            );
+
+            if ($millerProject !== null) {
+                $this->attachProjectSubcontractor($millerProject, $tileAssignment);
+                $this->pinTaskConflictDate(
+                    $millerProject,
+                    'Tile Installation',
+                    $tileConflictDate->toDateString(),
+                    $tileConflictDate->copy()->addDays(2)->toDateString(),
+                    $tileAssignment['user']->id,
+                    $tileAssignment['type']->id,
+                );
+            }
+        }
+
+        if ($williamsProject !== null && $deckAssignment !== null && $landscapeAssignment !== null) {
+            $this->attachProjectSubcontractor($williamsProject, $deckAssignment);
+            $this->attachProjectSubcontractor($williamsProject, $landscapeAssignment);
+            $this->pinTaskConflictDate(
+                $williamsProject,
+                'Decking Layout',
+                $tradeConflictDate->toDateString(),
+                $tradeConflictDate->toDateString(),
+                $deckAssignment['user']->id,
+                $deckAssignment['type']->id,
+            );
+
+            TimelineTask::query()->updateOrCreate(
+                [
+                    'project_id' => $williamsProject->id,
+                    'title' => 'Landscape Layout',
+                ],
+                [
+                    'company_id' => $company->id,
+                    'timeline_template_id' => $williamsProject->timelineTasks()->first()?->timeline_template_id,
+                    'assigned_subcontractor_id' => $landscapeAssignment['user']->id,
+                    'subcontractor_type_id' => $subcontractorTypes->get('landscaping')->id,
+                    'description' => 'Demo same-day trade overlap for conflict detection.',
+                    'sort_order' => 5,
+                    'sequence_order' => 5,
+                    'status' => 'upcoming',
+                    'starts_on' => $tradeConflictDate->toDateString(),
+                    'due_on' => $tradeConflictDate->toDateString(),
+                    'internal_only' => false,
+                    'requires_acknowledgement' => false,
+                ],
+            );
+        }
+    }
+
+    private function pinTaskConflictDate(
+        Project $project,
+        string $title,
+        string $startsOn,
+        string $dueOn,
+        int $subcontractorId,
+        int $subcontractorTypeId,
+    ): void {
+        $task = TimelineTask::query()
+            ->where('project_id', $project->id)
+            ->where('title', $title)
+            ->first();
+
+        $task?->update([
+            'assigned_subcontractor_id' => $subcontractorId,
+            'subcontractor_type_id' => $subcontractorTypeId,
+            'starts_on' => $startsOn,
+            'due_on' => $dueOn,
+            'status' => 'upcoming',
+            'internal_only' => false,
+        ]);
     }
 
     private function seedSubcontractorTypes(Company $company): Collection

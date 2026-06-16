@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Tests\Feature\ProjectVista;
 
 use App\Models\MediaAsset;
+use App\Models\Invitation;
 use App\Models\Project;
 use App\Models\ProjectDocument;
+use App\Models\TimelineTemplate;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -31,7 +33,7 @@ final class ProjectPagesTest extends TestCase
                 ->component('ProjectVista/ProjectsIndex')
                 ->where('role', 'company_admin')
                 ->has('metrics', 5)
-                ->has('rows', 5)
+                ->has('rows', 6)
                 ->where('rows', fn ($rows) => collect($rows)
                     ->contains(fn (array $row) => $row['slug'] === 'smith-residence')
                     && ! collect($rows)->contains(fn (array $row) => $row['slug'] === 'canyon-courtyard')));
@@ -55,6 +57,174 @@ final class ProjectPagesTest extends TestCase
                     && ! collect($rows)->contains(fn (array $row) => $row['slug'] === 'camelback-courtyard')));
     }
 
+    public function test_internal_users_can_view_project_create_page(): void
+    {
+        $this->seed();
+
+        $admin = User::query()->where('email', 'admin@omnipools.test')->firstOrFail();
+        $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
+
+        $this->actingAs($admin)
+            ->get(route('projects.create'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('ProjectVista/ProjectCreate')
+                ->where('role', 'company_admin')
+                ->has('companies.0.timeline_templates'));
+
+        $this->actingAs($manager)
+            ->get(route('projects.create'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('ProjectVista/ProjectCreate')
+                ->where('role', 'company_manager')
+                ->has('companies.0.managers')
+                ->has('companies.0.subcontractors'));
+    }
+
+    public function test_client_and_subcontractor_cannot_view_project_create_page(): void
+    {
+        $this->seed();
+
+        $client = User::query()->where('email', 'client@omnipools.test')->firstOrFail();
+        $subcontractor = User::query()->where('email', 'sub@omnipools.test')->firstOrFail();
+
+        $this->actingAs($client)
+            ->get(route('projects.create'))
+            ->assertForbidden();
+
+        $this->actingAs($subcontractor)
+            ->get(route('projects.create'))
+            ->assertForbidden();
+    }
+
+    public function test_company_admin_can_create_project_from_template_and_invite_unknown_client(): void
+    {
+        $this->seed();
+
+        $admin = User::query()->where('email', 'admin@omnipools.test')->firstOrFail();
+        $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
+        $subcontractor = User::query()->where('email', 'sub@omnipools.test')->firstOrFail();
+        $template = TimelineTemplate::query()
+            ->whereHas('company', fn ($query) => $query->where('slug', 'omni-pool-builders'))
+            ->withCount('taskTemplates')
+            ->firstOrFail();
+
+        $this->actingAs($admin)
+            ->post(route('projects.store'), [
+                ...$this->projectCreatePayload($template, $manager->id),
+                'name' => 'High Desert Escape',
+                'client_name' => 'Taylor Newhome',
+                'client_email' => 'taylor.newhome@example.com',
+                'subcontractor_ids' => [$subcontractor->id],
+                'contract_signed_on' => '2026-01-10',
+            ])
+            ->assertRedirect();
+
+        $project = Project::query()
+            ->where('company_id', $template->company_id)
+            ->where('slug', 'high-desert-escape')
+            ->firstOrFail();
+
+        $this->assertSame($manager->id, $project->manager_id);
+        $this->assertSame('Taylor Newhome', $project->client_name);
+        $this->assertSame('taylor.newhome@example.com', $project->client_email);
+        $this->assertTrue($project->users()->whereKey($manager->id)->wherePivot('role', 'company_manager')->exists());
+        $this->assertTrue($project->users()->whereKey($subcontractor->id)->wherePivot('role', 'subcontractor')->exists());
+        $this->assertSame($template->task_templates_count, $project->timelineTasks()->count());
+        $this->assertTrue($project->timelineTasks()->whereNotNull('starts_on')->exists());
+        $contractTask = $project->timelineTasks()->orderBy('sequence_order')->firstOrFail();
+        $this->assertSame('Contract Signed', $contractTask->title);
+        $this->assertTrue($contractTask->is_system);
+        $this->assertSame('complete', $contractTask->status);
+        $this->assertSame('2026-01-10', $contractTask->starts_on->toDateString());
+        $this->assertDatabaseHas('invitations', [
+            'company_id' => $template->company_id,
+            'project_id' => $project->id,
+            'email' => 'taylor.newhome@example.com',
+            'recipient_name' => 'Taylor Newhome',
+            'role' => 'client',
+            'status' => 'pending',
+        ]);
+    }
+
+    public function test_company_manager_creating_project_without_manager_field_is_assigned_to_project(): void
+    {
+        $this->seed();
+
+        $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
+        $template = TimelineTemplate::query()
+            ->whereHas('company', fn ($query) => $query->where('slug', 'omni-pool-builders'))
+            ->firstOrFail();
+        $payload = [
+            ...$this->projectCreatePayload($template, $manager->id),
+            'name' => 'Manager Created Residence',
+            'client_email' => 'manager-created@example.com',
+        ];
+        unset($payload['manager_id']);
+
+        $this->actingAs($manager)
+            ->post(route('projects.store'), $payload)
+            ->assertRedirect();
+
+        $project = Project::query()
+            ->where('company_id', $template->company_id)
+            ->where('slug', 'manager-created-residence')
+            ->firstOrFail();
+
+        $this->assertSame($manager->id, $project->manager_id);
+        $this->assertTrue($project->users()->whereKey($manager->id)->wherePivot('role', 'company_manager')->exists());
+    }
+
+    public function test_company_admin_can_create_project_and_attach_existing_client(): void
+    {
+        $this->seed();
+
+        $admin = User::query()->where('email', 'admin@omnipools.test')->firstOrFail();
+        $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
+        $client = User::query()->where('email', 'client@omnipools.test')->firstOrFail();
+        $template = TimelineTemplate::query()
+            ->whereHas('company', fn ($query) => $query->where('slug', 'omni-pool-builders'))
+            ->firstOrFail();
+
+        $this->actingAs($admin)
+            ->post(route('projects.store'), [
+                ...$this->projectCreatePayload($template, $manager->id),
+                'name' => 'Existing Client Retreat',
+                'client_name' => 'Avery Smith',
+                'client_email' => $client->email,
+            ])
+            ->assertRedirect();
+
+        $project = Project::query()
+            ->where('company_id', $template->company_id)
+            ->where('slug', 'existing-client-retreat')
+            ->firstOrFail();
+
+        $this->assertTrue($project->users()->whereKey($client->id)->wherePivot('role', 'client')->exists());
+        $this->assertSame('Avery Smith', $project->client_name);
+        $this->assertSame($client->email, $project->client_email);
+        $this->assertFalse(Invitation::query()
+            ->where('project_id', $project->id)
+            ->where('email', $client->email)
+            ->exists());
+    }
+
+    public function test_project_create_rejects_cross_company_requests(): void
+    {
+        $this->seed();
+
+        $otherAdmin = User::query()->where('email', 'admin@desertstone.test')->firstOrFail();
+        $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
+        $template = TimelineTemplate::query()
+            ->whereHas('company', fn ($query) => $query->where('slug', 'omni-pool-builders'))
+            ->firstOrFail();
+
+        $this->actingAs($otherAdmin)
+            ->post(route('projects.store'), $this->projectCreatePayload($template, $manager->id))
+            ->assertForbidden();
+    }
+
     public function test_subcontractor_project_index_hides_payments_and_messages(): void
     {
         $this->seed();
@@ -67,7 +237,7 @@ final class ProjectPagesTest extends TestCase
             ->assertInertia(fn (Assert $page) => $page
                 ->component('ProjectVista/ProjectsIndex')
                 ->where('role', 'subcontractor')
-                ->has('rows', 5)
+                ->has('rows', 6)
                 ->where('rows', fn ($rows) => collect($rows)->every(fn (array $row) => ! array_key_exists('payment_total', $row)
                     && ! array_key_exists('payment_paid', $row)
                     && ! array_key_exists('messages', $row))));
@@ -178,41 +348,61 @@ final class ProjectPagesTest extends TestCase
         $this->actingAs($admin)
             ->patch(route('projects.update', $project), [
                 'customer_name' => 'Jordan Smith',
+                'customer_email' => 'jordan.smith@example.com',
                 'address_line' => '777 Updated Ridge Road',
                 'city' => 'Scottsdale',
                 'state' => 'Arizona',
                 'postal_code' => '85255',
                 'contract_amount' => '132500',
-                'starts_on' => '2024-05-30',
-                'estimated_completion_on' => '2024-09-01',
-                'project_type' => 'Residential',
-                'status' => 'in_progress',
-                'phase' => 'Tile Installation',
+                'contract_signed_on' => $project->contract_signed_on->toDateString(),
             ])
             ->assertRedirect();
 
         $project->refresh();
         $this->assertSame('777 Updated Ridge Road', $project->address_line);
         $this->assertSame('132500.00', $project->contract_amount);
+        $this->assertSame('Jordan Smith', $project->client_name);
+        $this->assertSame('jordan.smith@example.com', $project->client_email);
         $this->assertSame('Jordan Smith', User::query()->where('email', 'client@omnipools.test')->firstOrFail()->name);
 
         $this->actingAs($manager)
             ->patch(route('projects.update', $project), [
                 'customer_name' => 'Avery Smith',
+                'customer_email' => 'avery.smith@example.com',
                 'address_line' => '1234 Desert Ridge Road',
                 'city' => 'Scottsdale',
                 'state' => 'Arizona',
                 'postal_code' => '85255',
                 'contract_amount' => '125000',
-                'starts_on' => '2024-05-24',
-                'estimated_completion_on' => '2024-08-30',
-                'project_type' => 'Residential',
-                'status' => 'in_progress',
-                'phase' => 'Startup & Balance',
+                'contract_signed_on' => $project->contract_signed_on->toDateString(),
             ])
             ->assertRedirect();
 
-        $this->assertSame('Startup & Balance', $project->refresh()->phase);
+        $project->refresh();
+        $this->assertSame('Avery Smith', $project->client_name);
+        $this->assertSame('avery.smith@example.com', $project->client_email);
+    }
+
+    public function test_company_admin_and_manager_can_delete_projects(): void
+    {
+        $this->seed();
+
+        $admin = User::query()->where('email', 'admin@omnipools.test')->firstOrFail();
+        $manager = User::query()->where('email', 'manager@omnipools.test')->firstOrFail();
+        $adminProject = Project::query()->where('slug', 'smith-residence')->firstOrFail();
+        $managerProject = Project::query()->where('slug', 'johnson-residence')->firstOrFail();
+
+        $this->actingAs($admin)
+            ->delete(route('projects.destroy', $adminProject))
+            ->assertRedirect(route('projects.index'));
+
+        $this->assertSoftDeleted('projects', ['id' => $adminProject->id]);
+
+        $this->actingAs($manager)
+            ->delete(route('projects.destroy', $managerProject))
+            ->assertRedirect(route('projects.index'));
+
+        $this->assertSoftDeleted('projects', ['id' => $managerProject->id]);
     }
 
     public function test_non_internal_users_cannot_update_project_details(): void
@@ -225,21 +415,37 @@ final class ProjectPagesTest extends TestCase
         $project = Project::query()->where('slug', 'smith-residence')->firstOrFail();
         $payload = [
             'customer_name' => 'Blocked User',
+            'customer_email' => 'blocked@example.com',
             'address_line' => 'Nope',
             'city' => 'Scottsdale',
             'state' => 'Arizona',
             'postal_code' => '85255',
             'contract_amount' => '1',
-            'starts_on' => '2024-05-24',
-            'estimated_completion_on' => '2024-08-30',
-            'project_type' => 'Residential',
-            'status' => 'in_progress',
-            'phase' => 'Blocked',
+            'contract_signed_on' => $project->contract_signed_on->toDateString(),
         ];
 
         $this->actingAs($client)->patch(route('projects.update', $project), $payload)->assertForbidden();
         $this->actingAs($subcontractor)->patch(route('projects.update', $project), $payload)->assertForbidden();
         $this->actingAs($otherAdmin)->patch(route('projects.update', $project), $payload)->assertForbidden();
+    }
+
+    public function test_non_internal_users_cannot_delete_project(): void
+    {
+        $this->seed();
+
+        $client = User::query()->where('email', 'client@omnipools.test')->firstOrFail();
+        $subcontractor = User::query()->where('email', 'sub@omnipools.test')->firstOrFail();
+        $otherAdmin = User::query()->where('email', 'admin@desertstone.test')->firstOrFail();
+        $project = Project::query()->where('slug', 'smith-residence')->firstOrFail();
+
+        $this->actingAs($client)->delete(route('projects.destroy', $project))->assertForbidden();
+        $this->actingAs($subcontractor)->delete(route('projects.destroy', $project))->assertForbidden();
+        $this->actingAs($otherAdmin)->delete(route('projects.destroy', $project))->assertForbidden();
+
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'deleted_at' => null,
+        ]);
     }
 
     public function test_internal_user_and_homeowner_can_upload_project_documents(): void
@@ -507,5 +713,30 @@ final class ProjectPagesTest extends TestCase
                 ->component('ProjectVista/Documents')
                 ->where('project.documents', fn ($documents) => collect($documents)
                     ->doesntContain(fn (array $document) => $document['title'] === 'Client Private Upload')));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function projectCreatePayload(TimelineTemplate $template, int $managerId): array
+    {
+        return [
+            'company_id' => $template->company_id,
+            'timeline_template_id' => $template->id,
+            'manager_id' => $managerId,
+            'name' => 'New Scottsdale Residence',
+            'client_name' => 'Taylor Client',
+            'client_email' => 'new-client@example.com',
+            'address_line' => '123 New Build Lane',
+            'city' => 'Scottsdale',
+            'state' => 'Arizona',
+            'postal_code' => '85255',
+            'contract_amount' => '225000',
+            'contract_signed_on' => '2026-01-10',
+            'client_summary' => 'A new ProjectVista client portal project.',
+            'latest_update' => 'Project created.',
+            'next_step' => 'Schedule kickoff.',
+            'subcontractor_ids' => [],
+        ];
     }
 }

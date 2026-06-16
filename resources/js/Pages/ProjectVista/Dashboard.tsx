@@ -1,16 +1,9 @@
 import { AnimatedProgress } from '@/Components/ProjectVista/AnimatedProgress';
 import { ApprovalDonut } from '@/Components/ProjectVista/ApprovalDonut';
+import { DataTable } from '@/Components/ProjectVista/DataTable';
 import { ProjectVistaShell } from '@/Components/ProjectVista/ProjectVistaShell';
 import { Badge } from '@/Components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/Components/ui/card';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/Components/ui/table';
 import {
     BusinessHomePayload,
     ClientHomePayload,
@@ -25,9 +18,10 @@ import {
 } from '@/types/projectvista';
 import { useGSAP } from '@gsap/react';
 import { Head, Link } from '@inertiajs/react';
+import { ColumnDef } from '@tanstack/react-table';
 import gsap from 'gsap';
 import { Circle } from 'lucide-react';
-import { ReactNode, useRef } from 'react';
+import { ReactNode, useMemo, useRef } from 'react';
 
 gsap.registerPlugin(useGSAP);
 
@@ -261,91 +255,139 @@ function BusinessDashboard({ home }: { home: BusinessHomePayload }) {
 }
 
 function ProjectTable({ rows }: { rows: DashboardProjectRowPayload[] }) {
+    const columns = useMemo<ColumnDef<DashboardProjectRowPayload>[]>(
+        () => [
+            {
+                accessorKey: 'name',
+                header: 'Project',
+                cell: ({ row }) => <ProjectLinkCell project={row.original} />,
+            },
+            { accessorKey: 'location', header: 'Location' },
+            {
+                accessorKey: 'progress',
+                header: 'Progress',
+                cell: ({ row }) => (
+                    <div className="flex min-w-32 flex-col gap-1">
+                        <span className="font-semibold">
+                            {row.original.progress}%
+                        </span>
+                        <AnimatedProgress value={row.original.progress} />
+                    </div>
+                ),
+            },
+            {
+                accessorKey: 'next_step',
+                header: 'Next Step',
+                cell: ({ row }) => (
+                    <>
+                        <div>{row.original.next_step}</div>
+                        <div className="text-muted-foreground text-sm">
+                            {row.original.date_range}
+                        </div>
+                    </>
+                ),
+            },
+            {
+                accessorKey: 'approvals',
+                header: 'Approvals',
+                cell: ({ row }) => (
+                    <span className="inline-flex items-center gap-2">
+                        <Circle className="fill-pv-red text-pv-red size-2" />
+                        {row.original.approvals}
+                    </span>
+                ),
+            },
+            {
+                accessorKey: 'payment_percent',
+                header: 'Payment Progress',
+                cell: ({ row }) => (
+                    <div className="min-w-36">
+                        <div className="font-semibold">
+                            {row.original.payment_percent}%
+                        </div>
+                        <AnimatedProgress
+                            value={row.original.payment_percent}
+                        />
+                        <div className="text-muted-foreground text-xs">
+                            {row.original.payment_paid} of{' '}
+                            {row.original.payment_total}
+                        </div>
+                    </div>
+                ),
+            },
+            {
+                accessorKey: 'messages',
+                header: 'Messages',
+                cell: ({ row }) => (
+                    <span className="inline-flex items-center gap-2">
+                        <Circle className="fill-pv-blue text-pv-blue size-2" />
+                        {row.original.messages}
+                    </span>
+                ),
+            },
+        ],
+        [],
+    );
+
     return (
         <div className="border-border bg-card/80 overflow-hidden rounded-xl border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead>Project</TableHead>
-                        <TableHead>Location</TableHead>
-                        <TableHead>Progress</TableHead>
-                        <TableHead>Next Step</TableHead>
-                        <TableHead>Approvals</TableHead>
-                        <TableHead>Payment Progress</TableHead>
-                        <TableHead>Messages</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {rows.map((project) => (
-                        <TableRow key={project.id}>
-                            <TableCell>
-                                <Link
-                                    href={route('projects.show', project.slug)}
-                                    className="flex items-center gap-3"
-                                >
-                                    <div className="pv-thumb size-12 rounded-md" />
-                                    <div>
-                                        <div className="font-semibold">
-                                            {project.name}
-                                        </div>
-                                        <div className="text-muted-foreground text-xs">
-                                            {project.code}
-                                        </div>
-                                    </div>
-                                </Link>
-                            </TableCell>
-                            <TableCell>{project.location}</TableCell>
-                            <TableCell>
-                                <div className="flex min-w-32 flex-col gap-1">
-                                    <span className="font-semibold">
-                                        {project.progress}%
-                                    </span>
-                                    <AnimatedProgress
-                                        value={project.progress}
-                                    />
-                                </div>
-                            </TableCell>
-                            <TableCell>
-                                <div>{project.next_step}</div>
-                                <div className="text-muted-foreground text-sm">
-                                    {project.date_range}
-                                </div>
-                            </TableCell>
-                            <TableCell>
-                                <span className="inline-flex items-center gap-2">
-                                    <Circle className="fill-pv-red text-pv-red size-2" />
-                                    {project.approvals}
-                                </span>
-                            </TableCell>
-                            <TableCell>
-                                <div className="min-w-36">
-                                    <div className="font-semibold">
-                                        {project.payment_percent}%
-                                    </div>
-                                    <AnimatedProgress
-                                        value={project.payment_percent}
-                                    />
-                                    <div className="text-muted-foreground text-xs">
-                                        {project.payment_paid} of{' '}
-                                        {project.payment_total}
-                                    </div>
-                                </div>
-                            </TableCell>
-                            <TableCell>
-                                <span className="inline-flex items-center gap-2">
-                                    <Circle className="fill-pv-blue text-pv-blue size-2" />
-                                    {project.messages}
-                                </span>
-                            </TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
+            <DataTable
+                columns={columns}
+                data={rows}
+                getRowId={(project) => project.id.toString()}
+            />
         </div>
     );
 }
 
+function ProjectLinkCell({ project }: { project: DashboardProjectRowPayload }) {
+    return (
+        <Link
+            href={route('projects.show', project.slug)}
+            className="flex items-center gap-3"
+        >
+            <div className="pv-thumb size-12 rounded-md" />
+            <div>
+                <div className="font-semibold">{project.name}</div>
+                <div className="text-muted-foreground text-xs">
+                    {project.code}
+                </div>
+            </div>
+        </Link>
+    );
+}
+
 function SubcontractorDashboard({ home }: { home: SubcontractorHomePayload }) {
+    const columns = useMemo<ColumnDef<DashboardProjectRowPayload>[]>(
+        () => [
+            {
+                accessorKey: 'name',
+                header: 'Project',
+                cell: ({ row }) => <ProjectLinkCell project={row.original} />,
+            },
+            { accessorKey: 'location', header: 'Location' },
+            { accessorKey: 'role_label', header: 'My Role' },
+            { accessorKey: 'current_task', header: 'Current Task' },
+            { accessorKey: 'due_date', header: 'Due Date' },
+            {
+                accessorKey: 'work_status',
+                header: 'Status',
+                cell: ({ row }) => (
+                    <Badge
+                        className={
+                            row.original.work_status === 'Upcoming'
+                                ? 'bg-pv-blue/20 text-pv-blue'
+                                : 'bg-pv-green/20 text-pv-green'
+                        }
+                    >
+                        {row.original.work_status}
+                    </Badge>
+                ),
+            },
+        ],
+        [],
+    );
+
     return (
         <div className="flex flex-col gap-8">
             <p className="text-muted-foreground text-lg">{home.subtitle}</p>
@@ -355,61 +397,11 @@ function SubcontractorDashboard({ home }: { home: SubcontractorHomePayload }) {
                     My Assigned Projects
                 </h2>
                 <div className="border-border bg-card/80 overflow-hidden rounded-xl border">
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Project</TableHead>
-                                <TableHead>Location</TableHead>
-                                <TableHead>My Role</TableHead>
-                                <TableHead>Current Task</TableHead>
-                                <TableHead>Due Date</TableHead>
-                                <TableHead>Status</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {home.project_rows.map((project) => (
-                                <TableRow key={project.id}>
-                                    <TableCell>
-                                        <Link
-                                            href={route(
-                                                'projects.show',
-                                                project.slug,
-                                            )}
-                                            className="flex items-center gap-3"
-                                        >
-                                            <div className="pv-thumb size-12 rounded-md" />
-                                            <div>
-                                                <div className="font-semibold">
-                                                    {project.name}
-                                                </div>
-                                                <div className="text-muted-foreground text-xs">
-                                                    {project.code}
-                                                </div>
-                                            </div>
-                                        </Link>
-                                    </TableCell>
-                                    <TableCell>{project.location}</TableCell>
-                                    <TableCell>{project.role_label}</TableCell>
-                                    <TableCell>
-                                        {project.current_task}
-                                    </TableCell>
-                                    <TableCell>{project.due_date}</TableCell>
-                                    <TableCell>
-                                        <Badge
-                                            className={
-                                                project.work_status ===
-                                                'Upcoming'
-                                                    ? 'bg-pv-blue/20 text-pv-blue'
-                                                    : 'bg-pv-green/20 text-pv-green'
-                                            }
-                                        >
-                                            {project.work_status}
-                                        </Badge>
-                                    </TableCell>
-                                </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
+                    <DataTable
+                        columns={columns}
+                        data={home.project_rows}
+                        getRowId={(project) => project.id.toString()}
+                    />
                 </div>
             </section>
             <div className="dashboard-card border-pv-blue/30 bg-pv-blue/10 rounded-xl border p-4 text-sm">

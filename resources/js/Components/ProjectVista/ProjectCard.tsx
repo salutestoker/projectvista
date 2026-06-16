@@ -31,7 +31,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
                             {project.name}
                         </h3>
                         <p className="mt-1 text-sm text-white/55">
-                            {project.phase} · {project.percent_complete}%
+                            {project.current_task} · {project.percent_complete}%
                             complete
                         </p>
                     </div>
@@ -39,7 +39,6 @@ export function ProjectCard({ project }: ProjectCardProps) {
                 </div>
                 <div className="mt-4 flex items-center gap-2">
                     <StatusPill status={project.health_status} />
-                    <StatusPill status={project.status} />
                 </div>
                 <div className="mt-5 grid grid-cols-3 gap-2 text-center text-xs text-white/60">
                     <div className="rounded-md bg-black/25 p-3">

@@ -52,6 +52,16 @@ final class Company extends Model
         return $this->hasMany(SubcontractorType::class)->orderBy('sort_order');
     }
 
+    public function timelineTemplates(): HasMany
+    {
+        return $this->hasMany(TimelineTemplate::class);
+    }
+
+    public function timelineTaskTemplates(): HasMany
+    {
+        return $this->hasMany(TimelineTaskTemplate::class)->orderBy('sequence_order');
+    }
+
     public function projects(): HasMany
     {
         return $this->hasMany(Project::class);

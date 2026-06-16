@@ -12,6 +12,7 @@ use App\Models\Project;
 use App\Models\ProjectDocument;
 use App\Models\Selection;
 use App\Models\TimelineTask;
+use App\Models\TimelineTemplate;
 use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -149,7 +150,7 @@ final class ProjectVistaData
             'timeline' => [
                 'percent' => $stats['average_progress'],
                 'status' => 'On Schedule',
-                'next_milestone' => $projects->first()?->phase ?? 'Tile Installation',
+                'next_milestone' => $this->currentTaskTitle($projects->first()) ?? 'Timeline',
                 'date_range' => $this->dateRange($projects->first()?->timelineTasks->firstWhere('status', 'in_progress')),
             ],
             'payments' => [
@@ -167,7 +168,7 @@ final class ProjectVistaData
     private function subcontractorHome(Collection $projects, User $user): array
     {
         $visibleTasks = $projects->flatMap->timelineTasks
-            ->filter(fn (TimelineTask $task) => $task->subcontractor_visible);
+            ->filter(fn (TimelineTask $task) => $task->assigned_subcontractor_id === $user->id);
 
         return [
             'type' => 'subcontractor',
@@ -177,18 +178,18 @@ final class ProjectVistaData
                 ['label' => 'Assigned Projects', 'value' => $projects->count(), 'detail' => 'Active Projects'],
                 ['label' => 'Tasks This Week', 'value' => $visibleTasks->whereBetween('due_on', [now()->startOfWeek(), now()->endOfWeek()])->count() + 10, 'detail' => 'Across All Projects'],
                 ['label' => 'My Tasks', 'value' => $visibleTasks->whereIn('status', ['in_progress', 'blocked', 'upcoming'])->count(), 'detail' => 'To Complete'],
-                ['label' => 'Completed Tasks', 'value' => $visibleTasks->where('status', 'completed')->count() + 14, 'detail' => 'This Month'],
+                ['label' => 'Completed Tasks', 'value' => $visibleTasks->where('status', 'complete')->count() + 14, 'detail' => 'This Month'],
                 ['label' => 'Pending Approvals', 'value' => $visibleTasks->where('requires_acknowledgement', true)->count() + 1, 'detail' => 'Waiting on Manager'],
             ],
             'project_rows' => $projects->take(8)->map(function (Project $project) use ($user) {
-                $task = $project->timelineTasks->firstWhere('subcontractor_visible', true) ?? $project->timelineTasks->first();
+                $task = $project->timelineTasks->firstWhere('assigned_subcontractor_id', $user->id) ?? $project->timelineTasks->first();
                 $row = $this->dashboardProjectRow($project, $user);
                 unset($row['payment_percent'], $row['payment_paid'], $row['payment_total'], $row['messages']);
 
                 return [
                     ...$row,
                     'role_label' => $user->projects->firstWhere('id', $project->id)?->pivot?->assigned_scope ?: 'Tile Contractor',
-                    'current_task' => $task?->title ?? $project->phase,
+                    'current_task' => $task?->title ?? $this->currentTaskTitle($project),
                     'due_date' => $this->dateRange($task),
                     'work_status' => in_array($task?->status, ['upcoming', 'scheduled'], true) ? 'Upcoming' : 'In Progress',
                 ];
@@ -227,7 +228,7 @@ final class ProjectVistaData
                 'name' => $project->name,
                 'location' => "{$project->city}, {$project->state}",
                 'status_label' => $project->health_status === 'on_track' ? 'On Schedule' : 'Needs Decision',
-                'next_step' => $project->phase,
+                'next_step' => $activeTask?->title ?? $project->next_step ?? 'Timeline',
                 'date_range' => $this->dateRange($activeTask),
                 'approvals_pending' => $project->approvals->where('status', 'pending')->count(),
                 'payments_paid' => $this->money($paymentsPaid),
@@ -250,11 +251,28 @@ final class ProjectVistaData
             'users',
             'projects.manager',
             'subcontractorTypes',
+            'timelineTemplates.taskTemplates.defaultSubcontractorType',
             'invitations' => fn ($query) => $query->latest(),
         ]);
+        $user = auth()->user();
+        $role = $user?->isSuperAdmin()
+            ? 'super_admin'
+            : ($user?->companyRole($company) ?? 'viewer');
+        $defaultTimelineTemplate = $company->timelineTemplates
+            ->firstWhere('is_default', true)
+            ?? $company->timelineTemplates->first();
+        $timelineTemplates = $company->timelineTemplates
+            ->sortByDesc('is_default')
+            ->values()
+            ->map(fn (TimelineTemplate $template) => $this->timelineTemplate($template));
 
         return [
             'company' => $this->company($company),
+            'role' => $role,
+            'permissions' => [
+                'can_manage_users' => $user !== null && $user->can('manageUsers', $company),
+                'can_manage_templates' => $user !== null && $user->can('manageTemplates', $company),
+            ],
             'users' => $company->users->map(fn (User $user) => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -263,9 +281,12 @@ final class ProjectVistaData
                 'title' => $user->pivot->title,
             ])->values(),
             'projects' => $company->projects->map(fn (Project $project) => $this->projectCard($project, auth()->user()))->values(),
+            'timeline_templates' => $timelineTemplates,
+            'timeline_template' => $defaultTimelineTemplate ? $this->timelineTemplate($defaultTimelineTemplate) : null,
             'invitations' => $company->invitations->map(fn ($invitation) => [
                 'id' => $invitation->id,
                 'email' => $invitation->email,
+                'recipient_name' => $invitation->recipient_name,
                 'role' => $invitation->role,
                 'subcontractor_type' => $company->subcontractorTypes->firstWhere('id', $invitation->subcontractor_type_id)?->name,
                 'status' => $invitation->status,
@@ -278,6 +299,63 @@ final class ProjectVistaData
                     'name' => $type->name,
                 ])
                 ->values(),
+        ];
+    }
+
+    public function projectCreate(User $user): array
+    {
+        $companyQuery = Company::query()
+            ->with([
+                'users',
+                'subcontractorTypes',
+                'timelineTemplates.taskTemplates.defaultSubcontractorType',
+            ])
+            ->orderBy('name');
+
+        if (! $user->isSuperAdmin()) {
+            $companyIds = DB::table('company_user')
+                ->where('user_id', $user->id)
+                ->whereIn('role', Roles::INTERNAL_ROLES)
+                ->pluck('company_id');
+
+            $companyQuery->whereIn('id', $companyIds);
+        }
+
+        $companies = $companyQuery->get();
+        $primaryCompany = $companies->first();
+
+        return [
+            'role' => $this->defaultRoleFor($user),
+            'company' => $primaryCompany ? $this->company($primaryCompany) : null,
+            'companies' => $companies->map(fn (Company $company) => [
+                ...$this->company($company),
+                'managers' => $company->users
+                    ->filter(fn (User $companyUser) => in_array($companyUser->pivot->role, Roles::INTERNAL_ROLES, true))
+                    ->sortBy('name')
+                    ->map(fn (User $companyUser) => [
+                        'id' => $companyUser->id,
+                        'name' => $companyUser->name,
+                        'email' => $companyUser->email,
+                        'role' => $companyUser->pivot->role,
+                        'title' => $companyUser->pivot->title,
+                    ])
+                    ->values(),
+                'subcontractors' => $company->users
+                    ->filter(fn (User $companyUser) => $companyUser->pivot->role === Roles::SUBCONTRACTOR)
+                    ->sortBy('name')
+                    ->map(fn (User $companyUser) => [
+                        'id' => $companyUser->id,
+                        'name' => $companyUser->name,
+                        'email' => $companyUser->email,
+                        'title' => $companyUser->pivot->title,
+                        'subcontractor_type_id' => $companyUser->pivot->subcontractor_type_id,
+                    ])
+                    ->values(),
+                'timeline_templates' => $company->timelineTemplates
+                    ->sortByDesc('is_default')
+                    ->values()
+                    ->map(fn (TimelineTemplate $template) => $this->timelineTemplate($template)),
+            ])->values(),
         ];
     }
 
@@ -304,6 +382,13 @@ final class ProjectVistaData
         $client = $role === Roles::CLIENT;
         $subcontractor = $role === Roles::SUBCONTRACTOR;
         $clientUser = $project->users->first(fn (User $projectUser) => $projectUser->pivot->role === Roles::CLIENT);
+        $clientContact = $project->client_name !== null || $project->client_email !== null || $clientUser !== null
+            ? [
+                'id' => $clientUser?->id,
+                'name' => $project->client_name ?: $clientUser?->name,
+                'email' => $project->client_email ?: $clientUser?->email,
+            ]
+            : null;
 
         return [
             'id' => $project->id,
@@ -317,26 +402,17 @@ final class ProjectVistaData
                 'name' => $project->manager->name,
                 'email' => $project->manager->email,
             ] : null,
-            'client' => $clientUser ? [
-                'id' => $clientUser->id,
-                'name' => $clientUser->name,
-                'email' => $clientUser->email,
-            ] : null,
+            'client' => $clientContact,
             'address' => "{$project->address_line}, {$project->city}, {$project->state}",
             'address_line' => $project->address_line,
             'city' => $project->city,
             'state' => $project->state,
             'postal_code' => $project->postal_code,
-            'project_type' => $project->project_type,
-            'status' => $project->status,
-            'phase' => $project->phase,
             'percent_complete' => $project->percent_complete,
             'health_status' => $project->health_status,
             'contract_amount' => $project->contract_amount,
-            'starts_on' => $project->starts_on?->toFormattedDateString(),
-            'starts_on_input' => $project->starts_on?->toDateString(),
-            'estimated_completion_on' => $project->estimated_completion_on?->toFormattedDateString(),
-            'estimated_completion_on_input' => $project->estimated_completion_on?->toDateString(),
+            'contract_signed_on' => $project->contract_signed_on?->toFormattedDateString(),
+            'contract_signed_on_input' => $project->contract_signed_on?->toDateString(),
             'hero_image_url' => $project->hero_image_path ? asset('storage/'.$project->hero_image_path) : null,
             'client_summary' => $project->client_summary,
             'latest_update' => $project->latest_update,
@@ -345,6 +421,7 @@ final class ProjectVistaData
             'permissions' => [
                 'can_edit_project' => $internal,
                 'can_update_project' => $internal,
+                'can_delete_project' => $user->can('delete', $project),
                 'can_manage_standards' => in_array($role, ['super_admin', Roles::COMPANY_ADMIN], true),
                 'can_message' => ! $subcontractor,
                 'can_view_payments' => ! $subcontractor,
@@ -353,8 +430,8 @@ final class ProjectVistaData
                 'can_manage_subcontractors' => $internal,
             ],
             'timeline' => $project->timelineTasks
-                ->filter(fn (TimelineTask $task) => $internal || ($client && $task->client_visible) || ($subcontractor && $task->subcontractor_visible))
-                ->map(fn (TimelineTask $task) => $this->timelineScheduler->taskRow($task))
+                ->filter(fn (TimelineTask $task) => $internal || ($client && ! $task->internal_only) || ($subcontractor && $task->assigned_subcontractor_id === $user->id))
+                ->map(fn (TimelineTask $task) => $this->timelineScheduler->taskRow($task, $role))
                 ->values(),
             'selections' => $project->selections
                 ->filter(fn (Selection $selection) => ! $subcontractor || $selection->status === 'approved')
@@ -454,9 +531,16 @@ final class ProjectVistaData
         $editableProjectIds = $canEdit
             ? $this->timelineScheduler->editableProjectIds($project, $user)
             : collect([$project->id]);
+        $taskProjectIds = $tasks
+            ->pluck('project_id')
+            ->filter()
+            ->unique()
+            ->values();
 
         $projects = Project::query()
             ->whereIn('id', $editableProjectIds)
+            ->whereIn('id', $taskProjectIds)
+            ->with('users')
             ->orderBy('name')
             ->get();
 
@@ -478,6 +562,12 @@ final class ProjectVistaData
                         'starts_on' => $task->starts_on?->toDateString(),
                         'due_on' => $task->due_on?->toDateString(),
                         'assigned_subcontractor_id' => $task->assigned_subcontractor_id,
+                        'subcontractor_type_id' => $task->subcontractor_type_id,
+                        'status' => $task->status,
+                        'is_job_site_ready' => $task->is_job_site_ready,
+                        'are_materials_ready' => $task->are_materials_ready,
+                        'is_customer_approval_required' => $task->is_customer_approval_required,
+                        'is_customer_approval_received' => $task->is_customer_approval_received,
                     ], $task)
                     : [])
                 ->unique(fn (array $conflict) => implode('|', [
@@ -495,7 +585,7 @@ final class ProjectVistaData
             'can_edit' => $canEdit,
             'scope_label' => $canEdit ? 'All Open Tasks' : $project->name,
             'metrics' => [
-                'open_tasks' => $tasks->where('status', '!=', 'completed')->count(),
+                'open_tasks' => $tasks->where('status', '!=', 'complete')->count(),
                 'conflicts' => $conflicts->count(),
                 'due_this_week' => $tasks
                     ->filter(fn (TimelineTask $task) => $task->due_on !== null
@@ -509,6 +599,24 @@ final class ProjectVistaData
                     'name' => $availableProject->name,
                     'slug' => $availableProject->slug,
                 ])->values(),
+                'project_subcontractors' => $projects
+                    ->mapWithKeys(fn (Project $availableProject) => [
+                        $availableProject->id => $availableProject->users
+                            ->filter(fn (User $projectUser) => $projectUser->pivot->role === Roles::SUBCONTRACTOR)
+                            ->sortBy('name')
+                            ->map(fn (User $projectUser) => [
+                                'id' => $projectUser->id,
+                                'name' => $projectUser->name,
+                                'email' => $projectUser->email,
+                                'assigned_scope' => $projectUser->pivot->assigned_scope,
+                                'subcontractor_type_id' => DB::table('company_user')
+                                    ->where('company_id', $availableProject->company_id)
+                                    ->where('user_id', $projectUser->id)
+                                    ->value('subcontractor_type_id'),
+                            ])
+                            ->values(),
+                    ])
+                    ->all(),
                 'subcontractor_types' => $subcontractorTypes->map(fn ($type) => [
                     'id' => $type->id,
                     'name' => $type->name,
@@ -518,7 +626,7 @@ final class ProjectVistaData
                     'label' => Str::headline($status),
                 ])->values(),
             ],
-            'tasks' => $tasks->map(fn (TimelineTask $task) => $this->timelineScheduler->taskRow($task))->values(),
+            'tasks' => $tasks->map(fn (TimelineTask $task) => $this->timelineScheduler->taskRow($task, $role))->values(),
             'subcontractors' => $subcontractors->map(fn (User $subcontractor) => [
                 'id' => $subcontractor->id,
                 'name' => $subcontractor->name,
@@ -701,10 +809,10 @@ final class ProjectVistaData
     {
         if ($role === Roles::SUBCONTRACTOR) {
             $visibleTasks = $projects->flatMap->timelineTasks
-                ->filter(fn (TimelineTask $task) => $task->subcontractor_visible);
+                ->filter(fn (TimelineTask $task) => $task->assigned_subcontractor_id !== null);
 
             return [
-                ['label' => 'Assigned Projects', 'value' => $projects->where('status', 'active')->count(), 'detail' => 'Active Projects'],
+                ['label' => 'Assigned Projects', 'value' => $projects->count(), 'detail' => 'Active Projects'],
                 ['label' => 'Tasks This Week', 'value' => $visibleTasks->whereBetween('due_on', [now()->startOfWeek(), now()->endOfWeek()])->count(), 'detail' => 'Across All Projects'],
                 ['label' => 'Upcoming Tasks', 'value' => $visibleTasks->whereIn('status', ['upcoming', 'scheduled'])->count(), 'detail' => 'On-Site Tasks', 'tone' => 'gold'],
                 ['label' => 'Pending Approvals', 'value' => $visibleTasks->where('requires_acknowledgement', true)->count(), 'detail' => 'Waiting on Others'],
@@ -754,6 +862,30 @@ final class ProjectVistaData
         ];
     }
 
+    private function timelineTemplate(TimelineTemplate $template): array
+    {
+        return [
+            'id' => $template->id,
+            'name' => $template->name,
+            'description' => $template->description,
+            'is_default' => $template->is_default,
+            'tasks' => $template->taskTemplates
+                ->sortBy('sequence_order')
+                ->map(fn ($taskTemplate) => [
+                    'id' => $taskTemplate->id,
+                    'name' => $taskTemplate->name,
+                    'description' => $taskTemplate->description,
+                    'sequence_order' => $taskTemplate->sequence_order,
+                    'default_duration_working_days' => $taskTemplate->default_duration_working_days,
+                    'default_subcontractor_type_id' => $taskTemplate->default_subcontractor_type_id,
+                    'default_subcontractor_type' => $taskTemplate->defaultSubcontractorType?->name,
+                    'internal_only' => $taskTemplate->internal_only,
+                    'is_system' => $taskTemplate->is_system,
+                ])
+                ->values(),
+        ];
+    }
+
     private function projectCard(Project $project, User $user): array
     {
         return [
@@ -761,8 +893,7 @@ final class ProjectVistaData
             'name' => $project->name,
             'slug' => $project->slug,
             'company' => $project->company?->name,
-            'phase' => $project->phase,
-            'status' => $project->status,
+            'current_task' => $this->currentTaskTitle($project) ?? 'Timeline',
             'percent_complete' => $project->percent_complete,
             'health_status' => $project->health_status,
             'hero_image_url' => $project->hero_image_path ? asset('storage/'.$project->hero_image_path) : null,
@@ -788,7 +919,7 @@ final class ProjectVistaData
             'slug' => $project->slug,
             'location' => "{$project->city}, {$project->state}",
             'progress' => $project->percent_complete,
-            'next_step' => $task?->title ?? $project->phase,
+            'next_step' => $task?->title ?? $this->currentTaskTitle($project) ?? 'Timeline',
             'date_range' => $this->dateRange($task),
             'approvals' => $project->approvals->where('status', 'pending')->count(),
             'payment_percent' => $paymentsTotal > 0 ? (int) round(($paymentsPaid / $paymentsTotal) * 100) : 0,
@@ -808,24 +939,24 @@ final class ProjectVistaData
             ...$row,
             'manager' => $project->manager?->name,
             'manager_id' => $project->manager?->id,
-            'client' => $client?->name,
+            'client' => $project->client_name ?: $client?->name,
             'client_id' => $client?->id,
-            'status' => $project->status,
             'health_status' => $project->health_status,
             'status_label' => $this->projectStatusLabel($project),
+            'can_delete_project' => $user->can('delete', $project),
         ];
     }
 
     private function subcontractorProjectIndexRow(Project $project, User $user): array
     {
         $task = $project->timelineTasks
-            ->filter(fn (TimelineTask $task) => $task->subcontractor_visible)
+            ->filter(fn (TimelineTask $task) => $task->assigned_subcontractor_id === $user->id)
             ->firstWhere('status', 'in_progress')
             ?? $project->timelineTasks
-                ->filter(fn (TimelineTask $task) => $task->subcontractor_visible)
+                ->filter(fn (TimelineTask $task) => $task->assigned_subcontractor_id === $user->id)
                 ->firstWhere('status', 'upcoming')
             ?? $project->timelineTasks
-                ->filter(fn (TimelineTask $task) => $task->subcontractor_visible)
+                ->filter(fn (TimelineTask $task) => $task->assigned_subcontractor_id === $user->id)
                 ->first();
 
         return [
@@ -836,12 +967,11 @@ final class ProjectVistaData
             'location' => "{$project->city}, {$project->state}",
             'progress' => $project->percent_complete,
             'role_label' => $project->users->firstWhere('id', $user->id)?->pivot?->assigned_scope ?: 'Assigned Trade Partner',
-            'current_task' => $task?->title ?? $project->phase,
+            'current_task' => $task?->title ?? $this->currentTaskTitle($project),
             'start_date' => $task?->starts_on?->format('M j'),
             'due_date' => $task?->due_on?->format('M j'),
             'work_status' => in_array($task?->status, ['upcoming', 'scheduled'], true) ? 'Upcoming' : 'In Progress',
             'status_label' => in_array($task?->status, ['upcoming', 'scheduled'], true) ? 'Upcoming' : 'In Progress',
-            'status' => $project->status,
             'health_status' => $project->health_status,
             'hero_image_url' => $project->hero_image_path ? asset('storage/'.$project->hero_image_path) : null,
         ];
@@ -909,7 +1039,7 @@ final class ProjectVistaData
             ->count();
 
         return [
-            'active_projects' => $projects->where('status', 'active')->count(),
+            'active_projects' => $projects->count(),
             'pending_approvals' => $projects->flatMap->approvals->where('status', 'pending')->count(),
             'pending_selections' => $projects->flatMap->selections->where('status', 'waiting_client')->count(),
             'blocked_tasks' => $projects->flatMap->timelineTasks->where('status', 'blocked')->count(),
@@ -976,6 +1106,19 @@ final class ProjectVistaData
         }
 
         return $task->starts_on->format('M j').' – '.$task->due_on->format('M j');
+    }
+
+    private function currentTaskTitle(?Project $project): ?string
+    {
+        if ($project === null) {
+            return null;
+        }
+
+        return $project->timelineTasks->firstWhere('status', 'in_progress')?->title
+            ?? $project->timelineTasks->firstWhere('status', 'blocked')?->title
+            ?? $project->timelineTasks->firstWhere('status', 'upcoming')?->title
+            ?? $project->timelineTasks->first()?->title
+            ?? $project->next_step;
     }
 
     private function money(float|int|string|null $amount): string

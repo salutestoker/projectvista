@@ -27,14 +27,12 @@ final class Project extends Model
         'city',
         'state',
         'postal_code',
-        'project_type',
-        'status',
-        'phase',
+        'client_name',
+        'client_email',
         'percent_complete',
         'health_status',
         'contract_amount',
-        'starts_on',
-        'estimated_completion_on',
+        'contract_signed_on',
         'hero_image_path',
         'client_summary',
         'latest_update',
@@ -45,8 +43,7 @@ final class Project extends Model
     {
         return [
             'contract_amount' => 'decimal:2',
-            'starts_on' => 'date',
-            'estimated_completion_on' => 'date',
+            'contract_signed_on' => 'date',
             'percent_complete' => 'integer',
         ];
     }
@@ -88,7 +85,9 @@ final class Project extends Model
 
     public function timelineTasks(): HasMany
     {
-        return $this->hasMany(TimelineTask::class)->orderBy('sort_order');
+        return $this->hasMany(TimelineTask::class)
+            ->orderByRaw('COALESCE(sequence_order, sort_order)')
+            ->orderBy('sort_order');
     }
 
     public function selections(): HasMany

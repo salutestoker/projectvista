@@ -27,14 +27,12 @@ final class ProjectFactory extends Factory
             'address_line' => fake()->streetAddress(),
             'city' => fake()->city(),
             'state' => fake()->stateAbbr(),
-            'project_type' => 'pool',
-            'status' => 'active',
-            'phase' => 'Planning',
+            'client_name' => fake()->name(),
+            'client_email' => fake()->safeEmail(),
             'percent_complete' => fake()->numberBetween(5, 85),
             'health_status' => 'on_track',
             'contract_amount' => fake()->randomFloat(2, 120000, 500000),
-            'starts_on' => now()->subMonth(),
-            'estimated_completion_on' => now()->addMonths(3),
+            'contract_signed_on' => now()->subMonths(2),
         ];
     }
 }
