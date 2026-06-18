@@ -21,7 +21,7 @@ export function Toast() {
     const { dismissToast, toastState } = useToastState();
 
     useEffect(() => {
-        if (!toastState) {
+        if (!toastState || toastState.persistent) {
             return;
         }
 
@@ -52,17 +52,37 @@ export function Toast() {
                             {labelByType[toastState.type]}
                         </div>
                         <p className="mt-1 text-sm">{toastState.message}</p>
+                        {toastState.actions?.length ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                {toastState.actions.map((action) => (
+                                    <Button
+                                        key={action.label}
+                                        type="button"
+                                        variant={action.variant ?? 'outline'}
+                                        size="sm"
+                                        disabled={action.disabled}
+                                        onClick={action.onClick}
+                                    >
+                                        {action.label}
+                                    </Button>
+                                ))}
+                            </div>
+                        ) : null}
                     </div>
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className="-mt-1 -mr-1"
-                        onClick={dismissToast}
-                    >
-                        <X />
-                        <span className="sr-only">Dismiss notification</span>
-                    </Button>
+                    {!toastState.persistent ? (
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="-mt-1 -mr-1"
+                            onClick={() => dismissToast()}
+                        >
+                            <X />
+                            <span className="sr-only">
+                                Dismiss notification
+                            </span>
+                        </Button>
+                    ) : null}
                 </div>
             </div>
         </div>

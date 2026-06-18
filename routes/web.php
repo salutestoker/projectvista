@@ -28,9 +28,19 @@ Route::middleware(['auth', 'verified'])->group(function () {
     })->name('super-admin.components');
 
     Route::get('/companies/{company:slug}/admin', [CompanyAdminController::class, 'show'])->name('companies.admin');
+    Route::get('/companies/{company:slug}/admin/timeline-templates', [CompanyAdminController::class, 'timelineTemplates'])->name('companies.timeline-templates.index');
+    Route::get('/companies/{company:slug}/admin/subcontractor-types', [CompanyAdminController::class, 'subcontractorTypes'])->name('companies.subcontractor-types.index');
+    Route::get('/companies/{company:slug}/admin/subcontractors', [CompanyAdminController::class, 'subcontractors'])->name('companies.subcontractors.index');
     Route::post('/companies/{company:slug}/invitations', [CompanyAdminController::class, 'invite'])->name('companies.invitations.store');
+    Route::post('/companies/{company:slug}/schedule/recalculate', [CompanyAdminController::class, 'recalculateSchedule'])->name('companies.schedule.recalculate');
+    Route::post('/companies/{company:slug}/subcontractor-types', [CompanyAdminController::class, 'storeSubcontractorType'])->name('companies.subcontractor-types.store');
+    Route::patch('/companies/{company:slug}/subcontractor-types/{subcontractorType}', [CompanyAdminController::class, 'updateSubcontractorType'])->name('companies.subcontractor-types.update');
+    Route::delete('/companies/{company:slug}/subcontractor-types/{subcontractorType}', [CompanyAdminController::class, 'destroySubcontractorType'])->name('companies.subcontractor-types.destroy');
+    Route::post('/companies/{company:slug}/subcontractors', [CompanyAdminController::class, 'storeSubcontractors'])->name('companies.subcontractors.store');
+    Route::patch('/companies/{company:slug}/subcontractors/{user}/scheduling', [CompanyAdminController::class, 'updateSubcontractorScheduling'])->name('companies.subcontractors.scheduling.update');
     Route::post('/companies/{company:slug}/timeline-templates', [CompanyAdminController::class, 'storeTimelineTemplate'])->name('companies.timeline-templates.store');
     Route::patch('/companies/{company:slug}/timeline-templates/{timelineTemplate}', [CompanyAdminController::class, 'updateTimelineTemplate'])->name('companies.timeline-templates.update');
+    Route::delete('/companies/{company:slug}/timeline-templates/{timelineTemplate}', [CompanyAdminController::class, 'destroyTimelineTemplate'])->name('companies.timeline-templates.destroy');
 
     Route::get('/storage/project-documents/{projectId}/{filename}', [ProjectController::class, 'showDocumentFromStoragePath'])
         ->whereNumber('projectId')
@@ -52,6 +62,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/projects/{project:slug}/timeline/tasks', [ProjectController::class, 'storeTimelineTask'])->name('projects.timeline.tasks.store');
     Route::post('/projects/{project:slug}/timeline/tasks/{task}/preview', [ProjectController::class, 'previewTimelineTask'])->name('projects.timeline.tasks.preview');
     Route::patch('/projects/{project:slug}/timeline/tasks/{task}', [ProjectController::class, 'updateTimelineTask'])->name('projects.timeline.tasks.update');
+    Route::patch('/projects/{project:slug}/timeline/tasks/{task}/lock', [ProjectController::class, 'updateTimelineTaskScheduleLock'])->name('projects.timeline.tasks.lock');
+    Route::post('/projects/{project:slug}/timeline/tasks/{task}/blocks', [ProjectController::class, 'storeTimelineTaskBlock'])->name('projects.timeline.tasks.blocks.store');
+    Route::patch('/projects/{project:slug}/timeline/tasks/{task}/blocks/{block}', [ProjectController::class, 'resolveTimelineTaskBlock'])->name('projects.timeline.tasks.blocks.resolve');
     Route::delete('/projects/{project:slug}/timeline/tasks/{task}', [ProjectController::class, 'destroyTimelineTask'])->name('projects.timeline.tasks.destroy');
     Route::get('/projects/{project:slug}/selections', [ProjectController::class, 'selections'])->name('projects.selections');
     Route::get('/projects/{project:slug}/approvals', [ProjectController::class, 'approvals'])->name('projects.approvals');

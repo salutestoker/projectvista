@@ -14,6 +14,8 @@ use App\Http\Requests\ProjectVista\StoreProjectDocumentRequest;
 use App\Http\Requests\ProjectVista\StoreProjectMediaRequest;
 use App\Http\Requests\ProjectVista\StoreProjectRequest;
 use App\Http\Requests\ProjectVista\StoreTimelineTaskRequest;
+use App\Http\Requests\ProjectVista\StoreTimelineTaskBlockRequest;
+use App\Http\Requests\ProjectVista\UpdateScheduleLockRequest;
 use App\Http\Requests\ProjectVista\UpdateProjectRequest;
 use App\Http\Requests\ProjectVista\UpdateProjectSubcontractorsRequest;
 use App\Http\Requests\ProjectVista\UpdateTimelineTaskRequest;
@@ -29,6 +31,7 @@ use App\Models\ProjectDocument;
 use App\Models\ScheduleChangeLog;
 use App\Models\Selection;
 use App\Models\TimelineTask;
+use App\Models\TimelineTaskBlock;
 use App\Models\TimelineTemplate;
 use App\Models\User;
 use App\Services\Scheduling\ProjectTimelineScheduler;
@@ -592,6 +595,86 @@ final class ProjectController extends Controller
         return back()->with('success', 'Timeline task deleted.');
     }
 
+    public function storeTimelineTaskBlock(
+        StoreTimelineTaskBlockRequest $request,
+        Project $project,
+        TimelineTask $task,
+        TimelineScheduler $scheduler,
+        ProjectTimelineScheduler $projectTimelineScheduler,
+    ): RedirectResponse {
+        Gate::authorize('update', $task);
+
+        abort_unless($task->company_id === $project->company_id, 404);
+        abort_unless($task->project_id !== null, 404);
+        abort_unless($scheduler->editableProjectIds($project, $request->user())->contains($task->project_id), 403);
+
+        TimelineTaskBlock::query()->create([
+            'company_id' => $task->company_id,
+            'project_id' => $task->project_id,
+            'timeline_task_id' => $task->id,
+            'created_by_id' => $request->user()->id,
+            'type' => $request->string('type')->toString(),
+            'title' => $request->string('title')->toString(),
+            'description' => $request->string('description')->toString() ?: null,
+        ]);
+
+        $projectTimelineScheduler->rescheduleCompanyProjectsByPriority($task->company()->firstOrFail());
+
+        return back()->with('success', 'Timeline block added.');
+    }
+
+    public function resolveTimelineTaskBlock(
+        Request $request,
+        Project $project,
+        TimelineTask $task,
+        TimelineTaskBlock $block,
+        TimelineScheduler $scheduler,
+        ProjectTimelineScheduler $projectTimelineScheduler,
+    ): RedirectResponse {
+        Gate::authorize('update', $task);
+
+        abort_unless($task->company_id === $project->company_id, 404);
+        abort_unless($block->timeline_task_id === $task->id, 404);
+        abort_unless($task->project_id !== null, 404);
+        abort_unless($scheduler->editableProjectIds($project, $request->user())->contains($task->project_id), 403);
+
+        $block->update([
+            'status' => 'resolved',
+            'resolved_by_id' => $request->user()->id,
+            'resolved_at' => now(),
+        ]);
+
+        $projectTimelineScheduler->rescheduleCompanyProjectsByPriority($task->company()->firstOrFail());
+
+        return back()->with('success', 'Timeline block resolved.');
+    }
+
+    public function updateTimelineTaskScheduleLock(
+        UpdateScheduleLockRequest $request,
+        Project $project,
+        TimelineTask $task,
+        TimelineScheduler $scheduler,
+        ProjectTimelineScheduler $projectTimelineScheduler,
+    ): RedirectResponse {
+        Gate::authorize('update', $task);
+
+        abort_unless($task->company_id === $project->company_id, 404);
+        abort_unless($task->project_id !== null, 404);
+        abort_unless($scheduler->editableProjectIds($project, $request->user())->contains($task->project_id), 403);
+
+        $validated = $request->validated();
+        $task->update([
+            'is_schedule_locked' => (bool) $validated['is_schedule_locked'],
+            'schedule_locked_reason' => (bool) $validated['is_schedule_locked']
+                ? ($validated['schedule_locked_reason'] ?? 'Manager locked schedule.')
+                : null,
+        ]);
+
+        $projectTimelineScheduler->rescheduleCompanyProjectsByPriority($task->company()->firstOrFail());
+
+        return back()->with('success', (bool) $validated['is_schedule_locked'] ? 'Schedule lock enabled.' : 'Schedule lock removed.');
+    }
+
     public function previewTimelineTask(
         PreviewTimelineTaskRequest $request,
         Project $project,
@@ -709,14 +792,21 @@ final class ProjectController extends Controller
 
         return [
             'title' => $validated['title'] ?? $task?->title ?? 'Timeline Task',
+            'phase' => $validated['phase'] ?? $task?->phase ?? 'Construction',
             'description' => array_key_exists('description', $validated)
                 ? ($validated['description'] ?? null)
                 : $task?->description,
             'status' => $status,
             'default_duration_working_days' => max(1, $durationDays),
+            'priority' => max(1, min(4, (int) ($validated['priority'] ?? $task?->priority ?? 2))),
+            'customer_urgency' => max(0, min(4, (int) ($validated['customer_urgency'] ?? $task?->customer_urgency ?? 1))),
             'completed_on' => $completedOn,
             'assigned_subcontractor_id' => $assignedSubcontractorId,
             'subcontractor_type_id' => $subcontractorTypeId,
+            'is_schedule_locked' => (bool) ($validated['is_schedule_locked'] ?? $task?->is_schedule_locked ?? false),
+            'schedule_locked_reason' => (bool) ($validated['is_schedule_locked'] ?? $task?->is_schedule_locked ?? false)
+                ? ($validated['schedule_locked_reason'] ?? $task?->schedule_locked_reason ?? 'Manager locked schedule.')
+                : null,
             'internal_only' => (bool) ($validated['internal_only'] ?? $task?->internal_only ?? false),
             'requires_acknowledgement' => (bool) ($validated['requires_acknowledgement'] ?? $task?->requires_acknowledgement ?? false),
             'is_job_site_ready' => (bool) ($validated['is_job_site_ready'] ?? $task?->is_job_site_ready ?? true),

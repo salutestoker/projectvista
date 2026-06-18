@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace Tests\Feature\ProjectVista;
 
-use App\Models\MediaAsset;
+use App\Models\Company;
 use App\Models\Invitation;
+use App\Models\MediaAsset;
 use App\Models\Project;
 use App\Models\ProjectDocument;
 use App\Models\TimelineTemplate;
 use App\Models\User;
+use App\Support\ProjectVista\Roles;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -37,6 +39,28 @@ final class ProjectPagesTest extends TestCase
                 ->where('rows', fn ($rows) => collect($rows)
                     ->contains(fn (array $row) => $row['slug'] === 'smith-residence')
                     && ! collect($rows)->contains(fn (array $row) => $row['slug'] === 'canyon-courtyard')));
+    }
+
+    public function test_company_project_index_includes_company_context_without_projects(): void
+    {
+        $company = Company::factory()->create();
+        $manager = User::factory()->create();
+
+        $company->users()->attach($manager->id, [
+            'role' => Roles::COMPANY_MANAGER,
+            'title' => 'Project Manager',
+            'joined_at' => now(),
+        ]);
+
+        $this->actingAs($manager)
+            ->get(route('projects.index'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('ProjectVista/ProjectsIndex')
+                ->where('role', 'company_manager')
+                ->where('company.slug', $company->slug)
+                ->where('primaryProject', null)
+                ->has('rows', 0));
     }
 
     public function test_company_manager_project_index_is_limited_to_assigned_or_managed_projects(): void

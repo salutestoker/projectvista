@@ -20,9 +20,11 @@ final class StoreTimelineTemplateRequest extends FormRequest
             'tasks' => ['required', 'array', 'min:1'],
             'tasks.*.id' => ['nullable', 'integer'],
             'tasks.*.name' => ['required', 'string', 'max:255'],
+            'tasks.*.phase' => ['nullable', 'string', 'max:255'],
             'tasks.*.description' => ['nullable', 'string', 'max:2000'],
             'tasks.*.sequence_order' => ['required', 'integer', 'min:1'],
             'tasks.*.default_duration_working_days' => ['required', 'integer', 'min:1', 'max:365'],
+            'tasks.*.uses_calendar_days' => ['boolean'],
             'tasks.*.is_system' => ['boolean'],
             'tasks.*.default_subcontractor_type_id' => [
                 'nullable',

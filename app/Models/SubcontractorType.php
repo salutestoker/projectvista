@@ -16,12 +16,14 @@ final class SubcontractorType extends Model
         'slug',
         'sort_order',
         'is_active',
+        'allows_same_project_overlap',
     ];
 
     protected function casts(): array
     {
         return [
             'is_active' => 'boolean',
+            'allows_same_project_overlap' => 'boolean',
             'sort_order' => 'integer',
         ];
     }

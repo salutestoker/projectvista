@@ -16,30 +16,34 @@ use Illuminate\Support\Facades\DB;
 
 final class TimelineScheduler
 {
-    public const CLOSED_STATUSES = ['complete'];
+    public const CLOSED_STATUSES = ['complete', 'cancelled'];
 
     public const OPEN_STATUSES = [
         'not_scheduled',
-        'upcoming',
         'ready',
+        'scheduled',
         'in_progress',
         'blocked',
-        'needs_approval',
-        'delayed',
-        'rescheduled',
     ];
 
     public const STATUSES = [
         'not_scheduled',
-        'upcoming',
         'ready',
+        'scheduled',
         'in_progress',
         'blocked',
+        'complete',
+        'cancelled',
+        'upcoming',
         'needs_approval',
         'delayed',
         'rescheduled',
-        'complete',
     ];
+
+    /**
+     * @var array<string, string|null>
+     */
+    private array $assignedSubcontractorTitleCache = [];
 
     public function __construct(private readonly ScheduleConflictDetector $conflictDetector) {}
 
@@ -72,7 +76,7 @@ final class TimelineScheduler
     {
         $role = $this->roleFor($contextProject, $user);
         $query = TimelineTask::query()
-            ->with(['project.manager', 'assignedSubcontractor', 'subcontractorType'])
+            ->with(['project.manager', 'assignedSubcontractor', 'subcontractorType', 'activeBlocks'])
             ->where('company_id', $contextProject->company_id);
 
         if (in_array($role, [Roles::COMPANY_ADMIN, Roles::COMPANY_MANAGER, 'super_admin'], true)) {
@@ -124,6 +128,9 @@ final class TimelineScheduler
     public function taskRow(TimelineTask $task, ?string $role = null): array
     {
         $client = $role === Roles::CLIENT;
+        $assignedSubcontractorTitle = $client
+            ? null
+            : $this->assignedSubcontractorTitleFor($task);
 
         return [
             'id' => $task->id,
@@ -132,10 +139,20 @@ final class TimelineScheduler
             'project_slug' => $task->project?->slug,
             'project_code' => 'PV-'.str_pad((string) (1000 + (int) $task->project_id), 4, '0', STR_PAD_LEFT),
             'title' => $task->title,
+            'phase' => $task->phase,
             'description' => $client ? ($task->customer_notes ?: $task->description) : $task->description,
             'sort_order' => $task->sort_order,
             'sequence_order' => $task->sequence_order,
             'default_duration_working_days' => $task->default_duration_working_days,
+            'priority' => $task->priority,
+            'customer_urgency' => $task->customer_urgency,
+            'readiness_status' => $task->readiness_status,
+            'ready_since' => $task->ready_since?->toFormattedDateString(),
+            'schedule_score' => $task->schedule_score,
+            'score_breakdown' => $task->score_breakdown,
+            'block_summary' => $this->blockSummaryFor($task, $client),
+            'is_schedule_locked' => $task->is_schedule_locked,
+            'schedule_locked_reason' => $client ? null : $task->schedule_locked_reason,
             'is_system' => $task->is_system,
             'status' => $task->status,
             'status_label' => $client ? $this->customerStatusLabel($task->status) : str($task->status)->headline()->toString(),
@@ -156,6 +173,7 @@ final class TimelineScheduler
             'customer_notes' => $task->customer_notes,
             'assigned_subcontractor_id' => $task->assigned_subcontractor_id,
             'assigned_subcontractor_name' => $client ? null : $task->assignedSubcontractor?->name,
+            'assigned_subcontractor_title' => $assignedSubcontractorTitle,
             'subcontractor_type_id' => $task->subcontractor_type_id,
             'subcontractor_type_name' => $client ? null : $task->subcontractorType?->name,
             'progress' => $this->progressFor($task),
@@ -190,15 +208,35 @@ final class TimelineScheduler
             ->join(' – ');
     }
 
+    private function assignedSubcontractorTitleFor(TimelineTask $task): ?string
+    {
+        if (! $task->assigned_subcontractor_id) {
+            return null;
+        }
+
+        $cacheKey = $task->company_id.':'.$task->assigned_subcontractor_id;
+
+        if (! array_key_exists($cacheKey, $this->assignedSubcontractorTitleCache)) {
+            $this->assignedSubcontractorTitleCache[$cacheKey] = DB::table('company_user')
+                ->where('company_id', $task->company_id)
+                ->where('user_id', $task->assigned_subcontractor_id)
+                ->value('title');
+        }
+
+        return $this->assignedSubcontractorTitleCache[$cacheKey];
+    }
+
     private function progressFor(TimelineTask $task): int
     {
         return match ($task->status) {
             'complete' => 100,
             'in_progress' => 65,
             'ready' => 45,
+            'scheduled' => 25,
             'blocked', 'needs_approval' => 35,
             'delayed', 'rescheduled' => 25,
             'not_scheduled' => 5,
+            'cancelled' => 0,
             default => 15,
         };
     }
@@ -206,7 +244,7 @@ final class TimelineScheduler
     private function customerStatusLabel(string $status): string
     {
         return match ($status) {
-            'not_scheduled', 'upcoming' => 'Upcoming',
+            'not_scheduled', 'upcoming', 'scheduled' => 'Upcoming',
             'ready' => 'Ready',
             'in_progress' => 'In Progress',
             'complete' => 'Complete',
@@ -214,7 +252,41 @@ final class TimelineScheduler
             'needs_approval' => 'Needs Review',
             'delayed' => 'Adjusted',
             'rescheduled' => 'Rescheduled',
+            'cancelled' => 'Cancelled',
             default => str($status)->headline()->toString(),
         };
+    }
+
+    private function blockSummaryFor(TimelineTask $task, bool $client): ?string
+    {
+        $blocks = $task->relationLoaded('activeBlocks')
+            ? $task->activeBlocks
+            : $task->activeBlocks()->get();
+
+        if ($blocks->isNotEmpty()) {
+            return $client
+                ? 'Waiting on project coordination.'
+                : $blocks->pluck('title')->join(', ');
+        }
+
+        $reasons = collect();
+
+        if (! $task->is_job_site_ready) {
+            $reasons->push('Job site not ready');
+        }
+
+        if (! $task->are_materials_ready) {
+            $reasons->push('Materials not ready');
+        }
+
+        if ($task->is_customer_approval_required && ! $task->is_customer_approval_received) {
+            $reasons->push('Customer approval required');
+        }
+
+        if ($reasons->isEmpty()) {
+            return null;
+        }
+
+        return $client ? 'Waiting on project coordination.' : $reasons->join(', ');
     }
 }

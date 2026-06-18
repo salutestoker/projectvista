@@ -19,12 +19,60 @@ export interface CompanyPayload {
     users_count?: number;
 }
 
+export interface CompanySettingsNavPayload {
+    active:
+        | 'overview'
+        | 'timeline_templates'
+        | 'subcontractors'
+        | 'subcontractor_types';
+    items: {
+        key:
+            | 'overview'
+            | 'timeline_templates'
+            | 'subcontractors'
+            | 'subcontractor_types';
+        label: string;
+        href: string;
+    }[];
+}
+
+export interface CompanySettingsPermissionsPayload {
+    can_manage_users: boolean;
+    can_manage_templates: boolean;
+    can_delete_templates: boolean;
+    can_manage_subcontractors: boolean;
+    can_manage_subcontractor_types: boolean;
+}
+
+export interface SubcontractorTypePayload {
+    id: number;
+    name: string;
+    slug: string;
+    sort_order: number;
+    is_active: boolean;
+    allows_same_project_overlap: boolean;
+}
+
+export interface CompanySubcontractorPayload {
+    id: number;
+    name: string;
+    email: string;
+    title?: string | null;
+    subcontractor_type_id?: number | null;
+    subcontractor_type?: string | null;
+    scheduling_capacity_daily: number;
+    reliability_score: number;
+    scheduling_is_active: boolean;
+}
+
 export interface TimelineTemplateTaskPayload {
     id: number | null;
     name: string;
+    phase?: string | null;
     description?: string | null;
     sequence_order: number;
     default_duration_working_days: number;
+    uses_calendar_days?: boolean;
     default_subcontractor_type_id?: number | null;
     default_subcontractor_type?: string | null;
     internal_only: boolean;
@@ -212,10 +260,20 @@ export interface TimelineTaskPayload {
     project_slug?: string | null;
     project_code?: string | null;
     title: string;
+    phase?: string | null;
     description?: string | null;
     sort_order: number;
     sequence_order?: number | null;
     default_duration_working_days?: number | null;
+    priority?: number | null;
+    customer_urgency?: number | null;
+    readiness_status?: string | null;
+    ready_since?: string | null;
+    schedule_score?: number | null;
+    score_breakdown?: Record<string, number> | null;
+    block_summary?: string | null;
+    is_schedule_locked?: boolean;
+    schedule_locked_reason?: string | null;
     is_system?: boolean;
     status: string;
     status_label?: string;
@@ -236,6 +294,7 @@ export interface TimelineTaskPayload {
     customer_notes?: string | null;
     assigned_subcontractor_id?: number | null;
     assigned_subcontractor_name?: string | null;
+    assigned_subcontractor_title?: string | null;
     subcontractor_type_id?: number | null;
     subcontractor_type_name?: string | null;
     progress?: number;
@@ -267,6 +326,8 @@ export interface TimelineWorkspacePayload {
     metrics: {
         open_tasks: number;
         conflicts: number;
+        ready_tasks: number;
+        blocked_tasks: number;
         due_this_week: number;
         sub_types: number;
     };
@@ -284,12 +345,12 @@ export interface TimelineWorkspacePayload {
                 email: string;
                 assigned_scope?: string | null;
                 subcontractor_type_id?: number | null;
+                scheduling_capacity_daily?: number;
+                reliability_score?: number;
+                scheduling_is_active?: boolean;
             }[]
         >;
-        subcontractor_types: {
-            id: number;
-            name: string;
-        }[];
+        subcontractor_types: SubcontractorTypePayload[];
         statuses: {
             value: string;
             label: string;
@@ -302,6 +363,9 @@ export interface TimelineWorkspacePayload {
         email: string;
         title?: string | null;
         subcontractor_type_id?: number | null;
+        scheduling_capacity_daily?: number;
+        reliability_score?: number;
+        scheduling_is_active?: boolean;
     }[];
     conflicts: TimelineConflictPayload[];
 }
@@ -443,5 +507,8 @@ export interface ProjectPayload {
         phone?: string | null;
         selected: boolean;
         assigned_scope?: string | null;
+        scheduling_capacity_daily?: number;
+        reliability_score?: number;
+        scheduling_is_active?: boolean;
     }[];
 }

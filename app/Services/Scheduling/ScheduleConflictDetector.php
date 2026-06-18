@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Scheduling;
 
 use App\Models\Project;
+use App\Models\SubcontractorType;
 use App\Models\TimelineTask;
 use App\Support\ProjectVista\TimelineScheduler;
 use Carbon\CarbonImmutable;
@@ -12,6 +13,7 @@ use Carbon\CarbonInterface;
 use Carbon\CarbonPeriod;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 final readonly class ScheduleConflictDetector
@@ -77,7 +79,7 @@ final readonly class ScheduleConflictDetector
 
             $conflicts = $conflicts
                 ->merge($this->detectSubcontractorDoubleBooking($task, $project, $range, $assignedSubcontractorId, $ignoredTaskIds, $ignoredProjectIds))
-                ->merge($this->detectSameProjectTradeConflict($task, $project, $range, $subcontractorTypeId, $ignoredTaskIds, $ignoredProjectIds))
+                ->merge($this->detectSameProjectTradeConflict($task, $project, $range, $assignedSubcontractorId, $subcontractorTypeId, $ignoredTaskIds, $ignoredProjectIds))
                 ->merge($this->detectSequenceConflict($task, $project, $range, $ignoredTaskIds))
                 ->merge($allowNonWorkingDays ? collect() : $this->detectNonWorkingDayConflict($task, $project, $range));
         }
@@ -109,9 +111,13 @@ final readonly class ScheduleConflictDetector
             return collect();
         }
 
-        return $this->overlappingTasks($project, $range, $task, $ignoredTaskIds, $ignoredProjectIds)
+        $overlaps = $this->overlappingTasks($project, $range, $task, $ignoredTaskIds, $ignoredProjectIds)
             ->where('assigned_subcontractor_id', $assignedSubcontractorId)
-            ->get()
+            ->get();
+        $capacity = $this->subcontractorCapacity($project, $assignedSubcontractorId);
+
+        return $overlaps
+            ->filter(fn (TimelineTask $conflict): bool => $this->exceedsCapacityOnOverlap($overlaps, $range, $conflict, $capacity))
             ->map(function (TimelineTask $conflict) use ($task, $project, $range): ScheduleConflict {
                 $conflict->loadMissing(['project', 'assignedSubcontractor', 'subcontractorType']);
                 $conflictDate = $this->firstOverlapDate($range, DateRange::from($conflict->starts_on, $conflict->due_on));
@@ -142,12 +148,49 @@ final readonly class ScheduleConflictDetector
     }
 
     /**
+     * @param  Collection<int, TimelineTask>  $overlaps
+     */
+    private function exceedsCapacityOnOverlap(Collection $overlaps, DateRange $range, TimelineTask $conflict, int $capacity): bool
+    {
+        foreach (CarbonPeriod::create($range->start, $range->end) as $date) {
+            if (! DateRange::from($conflict->starts_on, $conflict->due_on)->overlaps(new DateRange(
+                CarbonImmutable::parse($date)->startOfDay(),
+                CarbonImmutable::parse($date)->startOfDay(),
+            ))) {
+                continue;
+            }
+
+            $bookings = $overlaps
+                ->filter(fn (TimelineTask $task): bool => DateRange::from($task->starts_on, $task->due_on)->overlaps(new DateRange(
+                    CarbonImmutable::parse($date)->startOfDay(),
+                    CarbonImmutable::parse($date)->startOfDay(),
+                )))
+                ->count();
+
+            if ($bookings >= $capacity) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function subcontractorCapacity(Project $project, int $subcontractorId): int
+    {
+        return max(1, (int) (DB::table('company_user')
+            ->where('company_id', $project->company_id)
+            ->where('user_id', $subcontractorId)
+            ->value('scheduling_capacity_daily') ?? 1));
+    }
+
+    /**
      * @return Collection<int, ScheduleConflict>
      */
     private function detectSameProjectTradeConflict(
         TimelineTask $task,
         Project $project,
         DateRange $range,
+        ?int $assignedSubcontractorId,
         ?int $subcontractorTypeId,
         Collection $ignoredTaskIds,
         Collection $ignoredProjectIds,
@@ -156,14 +199,15 @@ final readonly class ScheduleConflictDetector
             return collect();
         }
 
+        $proposedType = $this->subcontractorTypeForProject($project, $subcontractorTypeId);
+
         return $this->overlappingTasks($project, $range, $task, $ignoredTaskIds, $ignoredProjectIds)
             ->where('project_id', $project->id)
             ->whereNotNull('subcontractor_type_id')
-            ->where('subcontractor_type_id', '!=', $subcontractorTypeId)
             ->get()
-            ->map(function (TimelineTask $conflict) use ($task, $project, $range): ScheduleConflict {
+            ->filter(fn (TimelineTask $conflict): bool => ! $this->canOverlapSameProject($assignedSubcontractorId, $proposedType, $conflict))
+            ->map(function (TimelineTask $conflict) use ($task, $project, $range, $proposedType): ScheduleConflict {
                 $conflict->loadMissing(['project', 'assignedSubcontractor', 'subcontractorType']);
-                $task->loadMissing('subcontractorType');
                 $conflictDate = $this->firstOverlapDate($range, DateRange::from($conflict->starts_on, $conflict->due_on));
 
                 return new ScheduleConflict(
@@ -181,13 +225,37 @@ final readonly class ScheduleConflictDetector
                     subcontractorTypeName: $conflict->subcontractorType?->name,
                     reason: sprintf(
                         '%s and %s are both scheduled on %s.',
-                        $task->subcontractorType?->name ?? 'The selected trade',
+                        $proposedType?->name ?? 'The selected trade',
                         $conflict->subcontractorType?->name ?? 'another trade',
                         $conflictDate?->format('M j') ?? 'the selected dates',
                     ),
                     suggestedResolution: 'Move one task to another working day before saving.',
                 );
             });
+    }
+
+    private function canOverlapSameProject(
+        ?int $assignedSubcontractorId,
+        ?SubcontractorType $proposedType,
+        TimelineTask $conflict,
+    ): bool
+    {
+        if ($assignedSubcontractorId !== null && (int) $conflict->assigned_subcontractor_id === $assignedSubcontractorId) {
+            return true;
+        }
+
+        $conflict->loadMissing('subcontractorType');
+
+        return (bool) $proposedType?->allows_same_project_overlap
+            && (bool) $conflict->subcontractorType?->allows_same_project_overlap;
+    }
+
+    private function subcontractorTypeForProject(Project $project, int $subcontractorTypeId): ?SubcontractorType
+    {
+        return SubcontractorType::query()
+            ->where('company_id', $project->company_id)
+            ->whereKey($subcontractorTypeId)
+            ->first();
     }
 
     /**

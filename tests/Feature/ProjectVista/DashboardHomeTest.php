@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature\ProjectVista;
 
+use App\Models\Company;
 use App\Models\User;
+use App\Support\ProjectVista\Roles;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Inertia\Testing\AssertableInertia as Assert;
 use Tests\TestCase;
@@ -12,6 +14,28 @@ use Tests\TestCase;
 final class DashboardHomeTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_company_admin_dashboard_includes_company_context_without_projects(): void
+    {
+        $company = Company::factory()->create();
+        $admin = User::factory()->create();
+
+        $company->users()->attach($admin->id, [
+            'role' => Roles::COMPANY_ADMIN,
+            'title' => 'Owner',
+            'joined_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(route('dashboard'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('ProjectVista/Dashboard')
+                ->where('role', 'company_admin')
+                ->where('company.slug', $company->slug)
+                ->where('primaryProject', null)
+                ->has('companies', 1));
+    }
 
     public function test_company_admin_receives_owner_dashboard_home_payload(): void
     {
@@ -26,7 +50,7 @@ final class DashboardHomeTest extends TestCase
                 ->component('ProjectVista/Dashboard')
                 ->where('role', 'company_admin')
                 ->where('home.type', 'owner')
-                ->has('home.metrics', 5)
+                ->has('home.metrics', 6)
                 ->has('home.project_rows', 6)
                 ->where('stats.active_projects', 6));
     }
@@ -44,7 +68,7 @@ final class DashboardHomeTest extends TestCase
                 ->component('ProjectVista/Dashboard')
                 ->where('role', 'company_manager')
                 ->where('home.type', 'manager')
-                ->has('home.metrics', 5)
+                ->has('home.metrics', 6)
                 ->has('home.project_rows', 6));
     }
 

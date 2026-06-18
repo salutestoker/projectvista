@@ -124,6 +124,58 @@ final class TimelineTemplateManagementTest extends TestCase
             ->assertSessionHasErrors('tasks.0.default_subcontractor_type_id');
     }
 
+    public function test_super_admin_can_delete_timeline_template(): void
+    {
+        $this->seed();
+
+        $superAdmin = User::query()->where('email', 'super@projectvista.test')->firstOrFail();
+        $company = Company::query()->where('slug', 'omni-pool-builders')->firstOrFail();
+        $template = TimelineTemplate::query()->create([
+            'company_id' => $company->id,
+            'name' => 'Delete Me Timeline',
+            'description' => 'Temporary template for deletion.',
+            'is_default' => false,
+        ]);
+        $taskTemplate = TimelineTaskTemplate::query()->create([
+            'company_id' => $company->id,
+            'timeline_template_id' => $template->id,
+            'name' => 'Delete Me Task',
+            'phase' => 'Planning',
+            'sequence_order' => 1,
+            'default_duration_working_days' => 1,
+            'internal_only' => false,
+            'is_system' => false,
+        ]);
+
+        $this->actingAs($superAdmin)
+            ->delete(route('companies.timeline-templates.destroy', [$company, $template]))
+            ->assertRedirect();
+
+        $this->assertDatabaseMissing('timeline_templates', [
+            'id' => $template->id,
+        ]);
+        $this->assertDatabaseMissing('timeline_task_templates', [
+            'id' => $taskTemplate->id,
+        ]);
+    }
+
+    public function test_company_admin_cannot_delete_timeline_template(): void
+    {
+        $this->seed();
+
+        $admin = User::query()->where('email', 'admin@omnipools.test')->firstOrFail();
+        $company = Company::query()->where('slug', 'omni-pool-builders')->firstOrFail();
+        $template = TimelineTemplate::query()->where('company_id', $company->id)->firstOrFail();
+
+        $this->actingAs($admin)
+            ->delete(route('companies.timeline-templates.destroy', [$company, $template]))
+            ->assertForbidden();
+
+        $this->assertDatabaseHas('timeline_templates', [
+            'id' => $template->id,
+        ]);
+    }
+
     /**
      * @return array<string, mixed>
      */

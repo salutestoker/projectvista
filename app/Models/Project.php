@@ -90,6 +90,16 @@ final class Project extends Model
             ->orderBy('sort_order');
     }
 
+    public function timelineTaskDependencies(): HasMany
+    {
+        return $this->hasMany(TimelineTaskDependency::class);
+    }
+
+    public function timelineTaskBlocks(): HasMany
+    {
+        return $this->hasMany(TimelineTaskBlock::class);
+    }
+
     public function selections(): HasMany
     {
         return $this->hasMany(Selection::class);

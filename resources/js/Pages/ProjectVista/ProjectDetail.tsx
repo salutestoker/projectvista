@@ -6,7 +6,6 @@ import {
     Card,
     CardContent,
     CardDescription,
-    CardFooter,
     CardHeader,
     CardTitle,
 } from '@/Components/ui/card';
@@ -18,6 +17,7 @@ import {
     FieldLabel,
 } from '@/Components/ui/field';
 import { Input } from '@/Components/ui/input';
+import { useDirtySaveToast } from '@/hooks/useDirtySaveToast';
 import { ProjectPayload } from '@/types/projectvista';
 import { Head, Link, useForm } from '@inertiajs/react';
 import { ColumnDef } from '@tanstack/react-table';
@@ -51,17 +51,30 @@ export default function ProjectDetail({ project }: ProjectDetailProps) {
     const canUpdate = project.permissions.can_update_project;
     const projectForm = useForm<ProjectFormData>(projectFormDefaults(project));
 
-    const saveProject = (event: FormEvent) => {
-        event.preventDefault();
+    const saveProject = () => {
         projectForm.patch(route('projects.update', project.slug), {
             preserveScroll: true,
         });
+    };
+
+    const submitProject = (event: FormEvent) => {
+        event.preventDefault();
+        saveProject();
     };
 
     const resetProjectForm = () => {
         projectForm.setData(projectFormDefaults(project));
         projectForm.clearErrors();
     };
+
+    useDirtySaveToast({
+        id: `project-information-${project.id}`,
+        isDirty: canUpdate && projectForm.isDirty,
+        isProcessing: projectForm.processing,
+        message: `Save changes to ${project.name}?`,
+        onSave: saveProject,
+        onCancel: resetProjectForm,
+    });
 
     return (
         <ProjectVistaShell
@@ -75,8 +88,6 @@ export default function ProjectDetail({ project }: ProjectDetailProps) {
                 <ProjectDetailHeader
                     project={project}
                     canUpdate={canUpdate}
-                    processing={projectForm.processing}
-                    onCancel={resetProjectForm}
                 />
 
                 <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_540px]">
@@ -85,7 +96,7 @@ export default function ProjectDetail({ project }: ProjectDetailProps) {
                             project={project}
                             form={projectForm}
                             canUpdate={canUpdate}
-                            onSubmit={saveProject}
+                            onSubmit={submitProject}
                         />
 
                         {project.permissions.can_manage_subcontractors ? (
@@ -109,13 +120,9 @@ export default function ProjectDetail({ project }: ProjectDetailProps) {
 function ProjectDetailHeader({
     project,
     canUpdate,
-    processing,
-    onCancel,
 }: {
     project: ProjectPayload;
     canUpdate: boolean;
-    processing: boolean;
-    onCancel: () => void;
 }) {
     return (
         <header className="flex flex-col gap-5 border-b border-white/10 pb-6 lg:flex-row lg:items-start lg:justify-between">
@@ -149,16 +156,6 @@ function ProjectDetailHeader({
                     <Button type="button" variant="outline">
                         <MoreHorizontal data-icon="inline-start" />
                         More Actions
-                    </Button>
-                    <Button type="button" variant="outline" onClick={onCancel}>
-                        Cancel
-                    </Button>
-                    <Button
-                        type="submit"
-                        form="project-information-form"
-                        disabled={processing}
-                    >
-                        {processing ? 'Saving...' : 'Save Changes'}
                     </Button>
                 </div>
             ) : null}
@@ -583,6 +580,24 @@ function SubcontractorAssignmentCard({
     const form = useForm<{ subcontractor_ids: number[] }>({
         subcontractor_ids: initialIds,
     });
+    const saveAssignments = () => {
+        form.patch(route('projects.subcontractors.update', project.slug), {
+            preserveScroll: true,
+        });
+    };
+    const cancelAssignments = () => {
+        form.setData('subcontractor_ids', initialIds);
+        form.clearErrors();
+    };
+
+    useDirtySaveToast({
+        id: `project-subcontractors-${project.id}`,
+        isDirty: form.isDirty,
+        isProcessing: form.processing,
+        message: `Save subcontractor assignments for ${project.name}?`,
+        onSave: saveAssignments,
+        onCancel: cancelAssignments,
+    });
 
     const toggleSubcontractor = useCallback((id: number, checked: boolean) => {
         const selected = new Set(form.data.subcontractor_ids);
@@ -642,9 +657,7 @@ function SubcontractorAssignmentCard({
 
     const submit = (event: FormEvent) => {
         event.preventDefault();
-        form.patch(route('projects.subcontractors.update', project.slug), {
-            preserveScroll: true,
-        });
+        saveAssignments();
     };
 
     return (
@@ -675,14 +688,6 @@ function SubcontractorAssignmentCard({
                         }
                     />
                 </CardContent>
-                <CardFooter className="justify-between">
-                    <p className="text-muted-foreground text-sm">
-                        Selected subcontractors receive scoped project access.
-                    </p>
-                    <Button type="submit" disabled={form.processing}>
-                        {form.processing ? 'Saving...' : 'Save Assignments'}
-                    </Button>
-                </CardFooter>
             </form>
         </Card>
     );

@@ -41,4 +41,14 @@ final class CompanyPolicy
         return $user->isSuperAdmin()
             || in_array($user->companyRole($company), Roles::INTERNAL_ROLES, true);
     }
+
+    public function manageSubcontractorTypes(User $user, Company $company): bool
+    {
+        return $this->manageTemplates($user, $company);
+    }
+
+    public function deleteTimelineTemplate(User $user, Company $company): bool
+    {
+        return $user->isSuperAdmin();
+    }
 }

@@ -27,6 +27,7 @@ gsap.registerPlugin(useGSAP);
 
 interface DashboardProps {
     role: ProjectVistaRole;
+    company: CompanyPayload | null;
     companies: CompanyPayload[];
     projects: ProjectCardPayload[];
     primaryProject: ProjectPayload | null;
@@ -43,6 +44,7 @@ interface DashboardProps {
 
 export default function Dashboard({
     role,
+    company,
     companies,
     projects,
     primaryProject,
@@ -90,6 +92,7 @@ export default function Dashboard({
             }
             role={role}
             project={primaryProject}
+            company={company}
             navBadges={badges}
             primaryAction={primaryAction}
         >
@@ -192,7 +195,7 @@ function BusinessDashboard({ home }: { home: BusinessHomePayload }) {
                             href={route('dashboard')}
                             className="text-primary text-sm underline underline-offset-4"
                         >
-                            {home.metrics[4]?.value} Unread Messages
+                            {home.metrics.find((metric) => metric.label === 'Unread Messages')?.value ?? 0} Unread Messages
                         </Link>
                     </CardContent>
                 </Card>

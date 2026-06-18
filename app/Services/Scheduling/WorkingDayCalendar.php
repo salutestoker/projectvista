@@ -70,4 +70,12 @@ final class WorkingDayCalendar
 
         return new DateRange($start, $end);
     }
+
+    public function calendarDateRange(CarbonInterface|string $earliestStart, int $durationDays): DateRange
+    {
+        $duration = max(1, $durationDays);
+        $start = CarbonImmutable::parse($earliestStart)->startOfDay();
+
+        return new DateRange($start, $start->addDays($duration - 1));
+    }
 }

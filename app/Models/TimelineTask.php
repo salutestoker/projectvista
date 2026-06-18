@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 final class TimelineTask extends Model
 {
@@ -19,13 +20,24 @@ final class TimelineTask extends Model
         'created_by_id',
         'updated_by_id',
         'title',
+        'phase',
         'description',
         'sort_order',
         'sequence_order',
         'default_duration_working_days',
+        'priority',
+        'customer_urgency',
+        'schedule_score',
+        'score_breakdown',
+        'is_schedule_locked',
+        'schedule_locked_reason',
+        'uses_calendar_days',
+        'last_scheduled_at',
         'internal_only',
         'is_system',
         'status',
+        'readiness_status',
+        'ready_since',
         'starts_on',
         'due_on',
         'completed_on',
@@ -46,10 +58,15 @@ final class TimelineTask extends Model
             'starts_on' => 'date',
             'due_on' => 'date',
             'completed_on' => 'date',
+            'ready_since' => 'datetime',
+            'last_scheduled_at' => 'datetime',
             'actual_start_date' => 'date',
             'actual_end_date' => 'date',
+            'score_breakdown' => 'array',
             'internal_only' => 'boolean',
             'is_system' => 'boolean',
+            'is_schedule_locked' => 'boolean',
+            'uses_calendar_days' => 'boolean',
             'requires_acknowledgement' => 'boolean',
             'is_job_site_ready' => 'boolean',
             'are_materials_ready' => 'boolean',
@@ -58,6 +75,9 @@ final class TimelineTask extends Model
             'sort_order' => 'integer',
             'sequence_order' => 'integer',
             'default_duration_working_days' => 'integer',
+            'priority' => 'integer',
+            'customer_urgency' => 'integer',
+            'schedule_score' => 'integer',
         ];
     }
 
@@ -99,5 +119,30 @@ final class TimelineTask extends Model
     public function taskTemplate(): BelongsTo
     {
         return $this->belongsTo(TimelineTaskTemplate::class, 'timeline_task_template_id');
+    }
+
+    public function predecessorDependencies(): HasMany
+    {
+        return $this->hasMany(TimelineTaskDependency::class, 'successor_task_id');
+    }
+
+    public function successorDependencies(): HasMany
+    {
+        return $this->hasMany(TimelineTaskDependency::class, 'predecessor_task_id');
+    }
+
+    public function blocks(): HasMany
+    {
+        return $this->hasMany(TimelineTaskBlock::class);
+    }
+
+    public function activeBlocks(): HasMany
+    {
+        return $this->hasMany(TimelineTaskBlock::class)->where('status', 'active');
+    }
+
+    public function scheduleRunItems(): HasMany
+    {
+        return $this->hasMany(ScheduleRunItem::class);
     }
 }

@@ -16,6 +16,7 @@ import {
 import { useConfirm } from '@/Context/ConfirmContext';
 import { cn } from '@/lib/utils';
 import {
+    CompanyPayload,
     DashboardMetricPayload,
     ProjectIndexFiltersPayload,
     ProjectIndexRowPayload,
@@ -32,6 +33,7 @@ interface ProjectsIndexProps {
     title: string;
     eyebrow: string;
     subtitle: string;
+    company: CompanyPayload | null;
     primaryProject: ProjectPayload | null;
     metrics: DashboardMetricPayload[];
     rows: ProjectIndexRowPayload[];
@@ -45,6 +47,7 @@ export default function ProjectsIndex({
     title,
     eyebrow,
     subtitle,
+    company,
     primaryProject,
     metrics,
     rows,
@@ -139,6 +142,7 @@ export default function ProjectsIndex({
             eyebrow={eyebrow}
             role={role}
             project={primaryProject}
+            company={company}
             navBadges={navBadges}
             primaryAction={primaryAction}
         >

@@ -21,6 +21,7 @@ const styles: Record<string, string> = {
     not_scheduled: 'border-white/15 bg-white/5 text-white/70',
     scheduled: 'border-white/15 bg-white/5 text-white/70',
     upcoming: 'border-white/15 bg-white/5 text-white/70',
+    cancelled: 'border-white/15 bg-white/5 text-white/55',
 };
 
 export function StatusPill({ status, label }: StatusPillProps) {

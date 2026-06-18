@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Schema;
 
 final class Company extends Model
 {
@@ -43,7 +44,7 @@ final class Company extends Model
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class)
-            ->withPivot(['role', 'title', 'subcontractor_type_id', 'invited_at', 'joined_at'])
+            ->withPivot($this->companyUserPivotColumns())
             ->withTimestamps();
     }
 
@@ -67,8 +68,39 @@ final class Company extends Model
         return $this->hasMany(Project::class);
     }
 
+    public function scheduleRuns(): HasMany
+    {
+        return $this->hasMany(ScheduleRun::class);
+    }
+
     public function invitations(): HasMany
     {
         return $this->hasMany(Invitation::class);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function companyUserPivotColumns(): array
+    {
+        $columns = [
+            'role',
+            'title',
+            'invited_at',
+            'joined_at',
+        ];
+
+        foreach ([
+            'subcontractor_type_id',
+            'scheduling_capacity_daily',
+            'reliability_score',
+            'scheduling_is_active',
+        ] as $column) {
+            if (Schema::hasColumn('company_user', $column)) {
+                $columns[] = $column;
+            }
+        }
+
+        return $columns;
     }
 }

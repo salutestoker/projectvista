@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Schema;
 
 #[Fillable(['name', 'email', 'password', 'is_super_admin'])]
 #[Hidden(['password', 'remember_token'])]
@@ -36,7 +37,7 @@ class User extends Authenticatable
     public function companies(): BelongsToMany
     {
         return $this->belongsToMany(Company::class)
-            ->withPivot(['role', 'title', 'subcontractor_type_id', 'invited_at', 'joined_at'])
+            ->withPivot($this->companyUserPivotColumns())
             ->withTimestamps();
     }
 
@@ -87,5 +88,31 @@ class User extends Authenticatable
             Roles::COMPANY_ADMIN,
             Roles::COMPANY_MANAGER,
         ], true);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function companyUserPivotColumns(): array
+    {
+        $columns = [
+            'role',
+            'title',
+            'invited_at',
+            'joined_at',
+        ];
+
+        foreach ([
+            'subcontractor_type_id',
+            'scheduling_capacity_daily',
+            'reliability_score',
+            'scheduling_is_active',
+        ] as $column) {
+            if (Schema::hasColumn('company_user', $column)) {
+                $columns[] = $column;
+            }
+        }
+
+        return $columns;
     }
 }

@@ -11,9 +11,19 @@ import {
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning';
 
+export interface ToastAction {
+    label: string;
+    onClick: () => void;
+    variant?: 'default' | 'outline' | 'destructive' | 'ghost';
+    disabled?: boolean;
+}
+
 export interface ToastState {
+    id?: string;
     message: string;
     type: ToastType;
+    persistent?: boolean;
+    actions?: ToastAction[];
 }
 
 interface ToastProviderProps {
@@ -23,7 +33,7 @@ interface ToastProviderProps {
 type ToastFunction = (options: ToastState) => void;
 
 interface ToastStateContextType {
-    dismissToast: () => void;
+    dismissToast: (id?: string) => void;
     toastState: ToastState | null;
 }
 
@@ -35,12 +45,18 @@ const ToastContext = createContext<ToastFunction | undefined>(undefined);
 export function ToastProvider({ children }: ToastProviderProps) {
     const [toastState, setToastState] = useState<ToastState | null>(null);
 
-    const toast = useCallback<ToastFunction>(({ message, type }) => {
-        setToastState({ message, type });
+    const toast = useCallback<ToastFunction>((options) => {
+        setToastState(options);
     }, []);
 
-    const dismissToast = useCallback(() => {
-        setToastState(null);
+    const dismissToast = useCallback((id?: string) => {
+        setToastState((current) => {
+            if (id && current?.id !== id) {
+                return current;
+            }
+
+            return null;
+        });
     }, []);
 
     useEffect(() => {

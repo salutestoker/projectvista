@@ -17,9 +17,14 @@ final class UpdateTimelineTaskRequest extends FormRequest
 
         return [
             'title' => ['sometimes', 'required', 'string', 'max:255'],
+            'phase' => ['nullable', 'string', 'max:255'],
             'description' => ['nullable', 'string', 'max:2000'],
             'status' => ['required', Rule::in(TimelineScheduler::STATUSES)],
             'duration_days' => ['nullable', 'integer', 'min:1', 'max:365'],
+            'priority' => ['nullable', 'integer', 'min:1', 'max:4'],
+            'customer_urgency' => ['nullable', 'integer', 'min:0', 'max:4'],
+            'is_schedule_locked' => ['boolean'],
+            'schedule_locked_reason' => ['nullable', 'string', 'max:255'],
             'assigned_subcontractor_id' => [
                 'nullable',
                 'integer',

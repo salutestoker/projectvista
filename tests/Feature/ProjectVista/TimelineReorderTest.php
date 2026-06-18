@@ -151,7 +151,9 @@ final class TimelineReorderTest extends TestCase
                 ->where('timeline.tasks', fn ($tasks) => collect($tasks)
                     ->contains(fn (array $task) => $task['status'] === 'complete')
                     && collect($tasks)
-                        ->contains(fn (array $task) => $task['project_name'] === 'Johnson Residence')));
+                        ->contains(fn (array $task) => $task['project_name'] === 'Johnson Residence')
+                    && collect($tasks)
+                        ->contains(fn (array $task) => ($task['assigned_subcontractor_title'] ?? null) === 'Tile Pro Solutions')));
     }
 
     public function test_internal_project_timeline_route_redirects_to_top_level_timelines(): void
@@ -259,7 +261,7 @@ final class TimelineReorderTest extends TestCase
             ->assertRedirect()
             ->assertSessionHasNoErrors();
 
-        $this->assertSame('in_progress', $task->refresh()->status);
+        $this->assertSame('scheduled', $task->refresh()->status);
 
         $this->actingAs($admin)
             ->patch(route('projects.timeline.tasks.update', [$project, $task]), [

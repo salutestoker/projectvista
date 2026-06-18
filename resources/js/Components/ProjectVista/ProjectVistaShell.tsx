@@ -82,6 +82,7 @@ export function ProjectVistaShell({
         role === 'super_admin' ||
         role === 'company_admin' ||
         role === 'company_manager';
+    const settingsCompany = company ?? project?.company ?? null;
 
     const companyNavItems =
         !project &&
@@ -99,18 +100,6 @@ export function ProjectVistaShell({
                       label: 'Timeline',
                       href: route('timelines.index'),
                       Icon: Timer,
-                  },
-                  // {
-                  //     key: 'reports',
-                  //     label: 'Reports',
-                  //     href: route('dashboard'),
-                  //     Icon: CalendarDays,
-                  // },
-                  {
-                      key: 'settings',
-                      label: 'Company Settings',
-                      href: route('companies.admin', company.slug),
-                      Icon: Settings,
                   },
               ]
             : [];
@@ -205,25 +194,16 @@ export function ProjectVistaShell({
                   //     href: route('projects.documents', project.slug),
                   //     Icon: FileText,
                   // },
-                  ...(role === 'company_admin' || role === 'company_manager'
-                      ? [
-                            // {
-                            //     key: 'reports',
-                            //     label: 'Reports',
-                            //     href: route('dashboard'),
-                            //     Icon: CalendarDays,
-                            // },
-                            {
-                                key: 'settings',
-                                label: 'Company Settings',
-                                href: route(
-                                    'companies.admin',
-                                    project.company.slug,
-                                ),
-                                Icon: Settings,
-                            },
-                        ]
-                      : []),
+              ]
+            : []),
+        ...(internalRole && settingsCompany
+            ? [
+                  {
+                      key: 'settings',
+                      label: 'Company Settings',
+                      href: route('companies.admin', settingsCompany.slug),
+                      Icon: Settings,
+                  },
               ]
             : []),
     ];

@@ -32,6 +32,7 @@ import {
 } from '@/Components/ui/select';
 import { Textarea } from '@/Components/ui/textarea';
 import { useConfirm } from '@/Context/ConfirmContext';
+import { useDirtySaveToast } from '@/hooks/useDirtySaveToast';
 import { cn } from '@/lib/utils';
 import {
     ProjectPayload,
@@ -60,9 +61,14 @@ type TimelineTaskForm = {
     project_id: string;
     predecessor_task_id: string;
     title: string;
+    phase: string;
     description: string;
     status: string;
     duration_days: string;
+    priority: string;
+    customer_urgency: string;
+    is_schedule_locked: boolean;
+    schedule_locked_reason: string;
     assigned_subcontractor_id: string;
     subcontractor_type_id: string;
     internal_only: boolean;
@@ -146,19 +152,25 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
         ? localConflicts
         : timeline.conflicts;
 
+    const setTaskFormData = (task: TimelineTaskPayload | null) => {
+        const defaults = taskFormDefaults(task, project, timeline);
+
+        form.setDefaults(defaults);
+        form.setData(defaults);
+        form.clearErrors();
+    };
+
     const selectTask = (task: TimelineTaskPayload) => {
         setSelectedTaskId(task.id);
         setLocalConflicts([]);
-        form.setData(taskFormDefaults(task, project, timeline));
-        form.clearErrors();
+        setTaskFormData(task);
         setTaskModalOpen(true);
     };
 
     const startNewTask = () => {
         setSelectedTaskId(null);
         setLocalConflicts([]);
-        form.setData(taskFormDefaults(null, project, timeline));
-        form.clearErrors();
+        setTaskFormData(null);
         setTaskModalOpen(true);
     };
 
@@ -168,24 +180,21 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
         form.clearErrors();
 
         if (selectedTask) {
-            form.setData(taskFormDefaults(selectedTask, project, timeline));
+            setTaskFormData(selectedTask);
 
             return;
         }
 
         setSelectedTaskId(initialSelectedTask?.id ?? null);
-        form.setData(taskFormDefaults(initialSelectedTask, project, timeline));
+        setTaskFormData(initialSelectedTask);
     };
 
-    const submitTask = (
-        event: FormEvent | MouseEvent<HTMLButtonElement>,
-        acknowledgeConflicts = false,
-    ) => {
-        event.preventDefault();
-
+    const saveTask = (acknowledgeConflicts = false) => {
         form.transform((data) => ({
             ...data,
             duration_days: Math.max(1, Number(data.duration_days || 1)),
+            priority: Math.max(1, Number(data.priority || 2)),
+            customer_urgency: Math.max(0, Number(data.customer_urgency || 1)),
             acknowledge_conflicts: acknowledgeConflicts,
         }));
 
@@ -214,6 +223,14 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
                 setLocalConflicts([]);
             },
         });
+    };
+
+    const submitTask = (
+        event: FormEvent | MouseEvent<HTMLButtonElement>,
+        acknowledgeConflicts = false,
+    ) => {
+        event.preventDefault();
+        saveTask(acknowledgeConflicts);
     };
 
     const deleteTask = useCallback(async (task: TimelineTaskPayload) => {
@@ -271,7 +288,12 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
                 accessorKey: 'title',
                 header: 'Task',
                 cell: ({ row }) => (
-                    <div className="font-semibold">{row.original.title}</div>
+                    <div>
+                        <div className="font-semibold">{row.original.title}</div>
+                        <div className="text-muted-foreground text-xs">
+                            {row.original.phase ?? 'Construction'}
+                        </div>
+                    </div>
                 ),
             },
             {
@@ -285,10 +307,35 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
                 ),
             },
             {
-                accessorKey: 'assigned_subcontractor_name',
+                accessorKey: 'assigned_subcontractor_title',
                 header: 'Sub-Contractor',
                 cell: ({ row }) =>
-                    row.original.assigned_subcontractor_name ?? 'Unassigned',
+                    row.original.assigned_subcontractor_title ??
+                    row.original.assigned_subcontractor_name ??
+                    'Unassigned',
+            },
+            {
+                accessorKey: 'readiness_status',
+                header: 'Readiness',
+                cell: ({ row }) => (
+                    <div className="flex flex-col gap-1">
+                        <Badge variant="secondary">
+                            {humanizeSelectValue(
+                                row.original.readiness_status ?? 'not_ready',
+                            )}
+                        </Badge>
+                        {row.original.block_summary ? (
+                            <span className="text-muted-foreground text-xs">
+                                {row.original.block_summary}
+                            </span>
+                        ) : null}
+                    </div>
+                ),
+            },
+            {
+                accessorKey: 'schedule_score',
+                header: 'Score',
+                cell: ({ row }) => row.original.schedule_score ?? 0,
             },
             {
                 accessorKey: 'starts_on',
@@ -346,10 +393,25 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
                             calculated from each project schedule.
                         </p>
                     </div>
-                    <Button type="button">Save Template</Button>
+                    <Button
+                        type="button"
+                        onClick={() =>
+                            router.post(
+                                route(
+                                    'companies.schedule.recalculate',
+                                    project.company.slug,
+                                ),
+                                {},
+                                { preserveScroll: true },
+                            )
+                        }
+                    >
+                        <CalendarDays data-icon="inline-start" />
+                        Recalculate
+                    </Button>
                 </header>
 
-                <section className="grid gap-4 md:grid-cols-4">
+                <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
                     <Metric
                         label="Open Tasks"
                         value={timeline.metrics.open_tasks}
@@ -360,6 +422,17 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
                         value={visibleConflicts.length}
                         detail="After reschedule"
                         destructive
+                    />
+                    <Metric
+                        label="Ready"
+                        value={timeline.metrics.ready_tasks}
+                        detail="Eligible work"
+                    />
+                    <Metric
+                        label="Blocked"
+                        value={timeline.metrics.blocked_tasks}
+                        detail="Needs action"
+                        destructive={timeline.metrics.blocked_tasks > 0}
                     />
                     <Metric
                         label="Due This Week"
@@ -473,6 +546,7 @@ function InternalTimeline({ project, timeline }: TimelineProps) {
                         form={form}
                         conflicts={localConflicts}
                         onSubmit={submitTask}
+                        onSave={saveTask}
                         onCancel={closeTaskModal}
                     />
                 </ProjectVistaModal>
@@ -489,6 +563,7 @@ function TimelineTaskFormPanel({
     form,
     conflicts,
     onSubmit,
+    onSave,
     onCancel,
 }: {
     timeline: TimelineWorkspacePayload;
@@ -499,6 +574,7 @@ function TimelineTaskFormPanel({
         event: FormEvent | MouseEvent<HTMLButtonElement>,
         acknowledgeConflicts?: boolean,
     ) => void;
+    onSave: (acknowledgeConflicts?: boolean) => void;
     onCancel: () => void;
 }) {
     const editingExisting = selectedTask !== null;
@@ -548,6 +624,15 @@ function TimelineTaskFormPanel({
         )?.title ?? 'Select predecessor';
 
     const quickEditTask = selectedTask;
+
+    useDirtySaveToast({
+        id: quickEditTask ? `timeline-task-${quickEditTask.id}` : 'timeline-task',
+        isDirty: editingExisting && form.isDirty,
+        isProcessing: form.processing,
+        message: 'Timeline task changes need to be saved.',
+        onSave: () => onSave(false),
+        onCancel,
+    });
 
     if (editingExisting && quickEditTask) {
         return (
@@ -620,6 +705,26 @@ function TimelineTaskFormPanel({
                                 }
                             />
 
+                            <TextField
+                                label="Priority"
+                                type="number"
+                                value={form.data.priority}
+                                error={form.errors.priority}
+                                onChange={(value) =>
+                                    form.setData('priority', value)
+                                }
+                            />
+
+                            <TextField
+                                label="Customer Urgency"
+                                type="number"
+                                value={form.data.customer_urgency}
+                                error={form.errors.customer_urgency}
+                                onChange={(value) =>
+                                    form.setData('customer_urgency', value)
+                                }
+                            />
+
                             <Field
                                 data-invalid={
                                     !!form.errors.assigned_subcontractor_id
@@ -686,20 +791,16 @@ function TimelineTaskFormPanel({
                                     </FieldDescription>
                                 ) : null}
                             </Field>
+
+                            <BooleanField
+                                label="Lock schedule"
+                                checked={form.data.is_schedule_locked}
+                                onChange={(checked) =>
+                                    form.setData('is_schedule_locked', checked)
+                                }
+                            />
                         </FieldGroup>
                     </form>
-                </div>
-                <div className="border-border grid gap-3 border-t px-6 py-4 md:grid-cols-2">
-                    <Button type="button" variant="outline" onClick={onCancel}>
-                        Cancel
-                    </Button>
-                    <Button
-                        type="submit"
-                        form="timeline-task-form"
-                        disabled={form.processing}
-                    >
-                        Save Task
-                    </Button>
                 </div>
             </div>
         );
@@ -831,6 +932,12 @@ function TimelineTaskFormPanel({
                             error={form.errors.title}
                             onChange={(value) => form.setData('title', value)}
                         />
+                        <TextField
+                            label="Phase"
+                            value={form.data.phase}
+                            error={form.errors.phase}
+                            onChange={(value) => form.setData('phase', value)}
+                        />
                         <Field data-invalid={!!form.errors.status}>
                             <FieldLabel>Task Status</FieldLabel>
                             <Select
@@ -861,6 +968,34 @@ function TimelineTaskFormPanel({
                             </Select>
                             <FieldError>{form.errors.status}</FieldError>
                         </Field>
+
+                        <TextField
+                            label="Duration (Days)"
+                            type="number"
+                            value={form.data.duration_days}
+                            error={form.errors.duration_days}
+                            onChange={(value) =>
+                                form.setData('duration_days', value)
+                            }
+                        />
+
+                        <TextField
+                            label="Priority"
+                            type="number"
+                            value={form.data.priority}
+                            error={form.errors.priority}
+                            onChange={(value) => form.setData('priority', value)}
+                        />
+
+                        <TextField
+                            label="Customer Urgency"
+                            type="number"
+                            value={form.data.customer_urgency}
+                            error={form.errors.customer_urgency}
+                            onChange={(value) =>
+                                form.setData('customer_urgency', value)
+                            }
+                        />
 
                         <Field
                             data-invalid={
@@ -979,6 +1114,13 @@ function TimelineTaskFormPanel({
                                 checked={form.data.internal_only}
                                 onChange={(checked) =>
                                     form.setData('internal_only', checked)
+                                }
+                            />
+                            <BooleanField
+                                label="Lock schedule"
+                                checked={form.data.is_schedule_locked}
+                                onChange={(checked) =>
+                                    form.setData('is_schedule_locked', checked)
                                 }
                             />
                             <BooleanField
@@ -1404,9 +1546,14 @@ function taskFormDefaults(
         project_id: projectId,
         predecessor_task_id: projectTasks[0]?.id.toString() ?? '',
         title: task?.title ?? '',
+        phase: task?.phase ?? 'Construction',
         description: task?.description ?? '',
-        status: task?.status ?? 'upcoming',
+        status: task?.status ?? 'scheduled',
         duration_days: task ? taskDurationInputDays(task).toString() : '1',
+        priority: task?.priority?.toString() ?? '2',
+        customer_urgency: task?.customer_urgency?.toString() ?? '1',
+        is_schedule_locked: task?.is_schedule_locked ?? false,
+        schedule_locked_reason: task?.schedule_locked_reason ?? '',
         assigned_subcontractor_id:
             task?.assigned_subcontractor_id?.toString() ?? '',
         subcontractor_type_id: task?.subcontractor_type_id?.toString() ?? '',
